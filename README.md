@@ -18,6 +18,47 @@ the ideal target against what the current importer actually produces.
 - **Autosave**, auto-resume, and per-variant progress tracking
 - Exports a **consolidated JSON** + a **tidy/long CSV** (with a `variant` column)
 
+## Team Setup (for teammates)
+
+Everyone runs the app **locally**; decks and grades are shared through one **Google Drive**
+folder. You only need to do this once.
+
+**First, get access to:**
+
+- The GitHub repo: `gamma-app/import-grader-annotator`
+- The shared Google **Shared drive** folder (e.g. `import-slide-grader-data`)
+- **Google Drive for Desktop** installed, with that Shared drive synced to your Mac/PC
+
+**Then:**
+
+```bash
+# 1. Get the code
+git clone https://github.com/gamma-app/import-grader-annotator.git
+cd import-grader-annotator
+
+# 2. Install (Python venv + deps, frontend deps, and builds the UI)
+./setup.sh
+
+# 3. Point the app at the shared Drive folder
+cp .env.example .env
+#    Edit .env and set SLIDE_GRADER_DATA to YOUR local path to the synced folder, e.g.
+#    SLIDE_GRADER_DATA="$HOME/Library/CloudStorage/GoogleDrive-<you>@gamma.app/Shared drives/<Name>/import-slide-grader-data"
+
+# 4. Run it (serves the app at http://127.0.0.1:8000 and opens your browser)
+./run.sh
+```
+
+> **Finding your Drive path:** in Finder, right-click the folder → hold **⌥ Option** →
+> **“Copy … as Pathname”**, or drag the folder into a Terminal window. The path contains
+> spaces, so keep it wrapped in quotes in `.env`.
+
+**The one rule:** split the decks between you — don't grade the *same* deck at the same time
+(grades are one file per deck and Drive is last-write-wins). Everything autosaves to the
+shared folder and syncs to the team within seconds.
+
+New to the tool? See **Adding decks**, **Export**, and **Keyboard** below. Setting it up for
+the team for the first time? See **Sharing with a teammate (Google Drive)**.
+
 ## Stack
 
 - **Backend:** FastAPI (Python) — scans decks, renders PDFs→PNGs (PyMuPDF), stores annotations as JSON, builds exports.
@@ -115,13 +156,8 @@ the safe workflow is **divide the decks** — don't have two people grade the *s
    # add --with-annotations to also copy local grades, --dry-run to preview
    ```
 
-**Each teammate:**
-
-1. `git clone` the repo, then `./setup.sh`.
-2. `cp .env.example .env` and set `SLIDE_GRADER_DATA` to the **local path** of the synced folder:
-   - macOS: `~/Library/CloudStorage/GoogleDrive-you@gamma.app/Shared drives/<Name>/slide-grader-data`
-   - Windows (Git Bash): `/g/Shared drives/<Name>/slide-grader-data`
-3. `./run.sh` and grade. Saves land in the shared folder and sync to everyone within seconds.
+**Each teammate:** follow the [Team Setup](#team-setup-for-teammates) quickstart near the top
+(clone → `./setup.sh` → set `SLIDE_GRADER_DATA` in `.env` → `./run.sh`).
 
 **Add a deck later:** drop its three PDFs into `<data>/decks/<slug>/` in the Drive folder (or
 re-run `seed_drive.sh`). It shows up for everyone; PNGs render locally on first open.

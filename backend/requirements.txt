@@ -1,0 +1,6 @@
+# Loose floors so pip picks the newest wheels (important on very new Pythons).
+# Plain uvicorn (no [standard]) avoids uvloop/httptools/watchfiles native builds.
+fastapi>=0.115
+uvicorn>=0.30
+pymupdf>=1.24
+pydantic>=2.9

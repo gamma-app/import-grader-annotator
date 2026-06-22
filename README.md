@@ -16,6 +16,7 @@ the ideal target against what the current importer actually produces.
 - Grades: **Pass / Borderline / Fail** (+ free-text note), defaulting to *ungraded*
 - Synchronized side-by-side **zoom/pan** viewer
 - **Autosave**, auto-resume, and per-variant progress tracking
+- **Failure-mode filter** — focus the grading rail on a chosen subset of modes (quick toggles by severity/element). It's view-only and resets on reload, so it never affects grades, progress, or exports.
 - Exports a **consolidated JSON** + a **tidy/long CSV** (with a `variant` column)
 
 ## Team Setup (for teammates)
@@ -116,6 +117,20 @@ data/decks/<slug>/
 - A variant is gradable when `input.pdf` plus that variant's output PDF are present.
   A deck missing one output still works on the other page; the missing one shows under
   **Awaiting output**.
+
+### Adding a deck to the shared Drive
+
+Day-to-day the data dir *is* your Google Drive folder, so adding a deck is just:
+
+1. Drop a new `decks/<slug>/` folder (with the PDFs above) into the shared Drive folder.
+2. Let Google Drive finish syncing — it's on your own disk immediately; teammates get it
+   once their Drive syncs.
+3. In the app, click **Rescan / re-render**. The deck appears and renders on first open —
+   no restart and no code change.
+4. Teammates pick it up the same way (Rescan after their Drive syncs).
+
+**PDFs only** — never add PNGs; the app renders those locally per machine, and they're
+never synced to Drive.
 
 ## Data & storage
 

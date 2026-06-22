@@ -11,6 +11,9 @@ export default function App() {
   const [variant, setVariant] = useState(() => localStorage.getItem('variant') || 'ideal')
   const [exporting, setExporting] = useState(false)
   const [toast, setToast] = useState(null)
+  // View-only failure-mode filter for the grading rail: null = all modes shown,
+  // or a Set of visible mode ids. App-wide and session-only (not persisted).
+  const [modeFilter, setModeFilter] = useState(null)
 
   useEffect(() => {
     api.getModes().then(setModes).catch((e) => setError(String(e)))
@@ -107,6 +110,8 @@ export default function App() {
             slug={view.slug}
             variant={variant}
             modes={modes}
+            modeFilter={modeFilter}
+            onModeFilterChange={setModeFilter}
             onBack={() => setView({ name: 'dashboard' })}
             showToast={showToast}
           />

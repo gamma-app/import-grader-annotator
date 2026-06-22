@@ -3,8 +3,9 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Check, AlertTriangle, Pa
 import { api } from '../api'
 import ImageViewer from './ImageViewer.jsx'
 import ModePanel, { ModeRow } from './ModePanel.jsx'
+import ModeFilter from './ModeFilter.jsx'
 
-export default function DeckView({ slug, variant, modes, onBack, showToast }) {
+export default function DeckView({ slug, variant, modes, modeFilter, onModeFilterChange, onBack, showToast }) {
   const [deck, setDeck] = useState(null)
   const [index, setIndex] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -18,6 +19,12 @@ export default function DeckView({ slug, variant, modes, onBack, showToast }) {
 
   const pairModes = useMemo(() => modes.modes.filter((m) => m.level === 'pair'), [modes])
   const deckModes = useMemo(() => modes.modes.filter((m) => m.level === 'deck'), [modes])
+  // View-only: which pair modes the rail renders. Filtering never changes saved
+  // grades, the reviewed/complete status, dashboard progress, or exports.
+  const visiblePairModes = useMemo(
+    () => (modeFilter ? pairModes.filter((m) => modeFilter.has(m.id)) : pairModes),
+    [pairModes, modeFilter],
+  )
 
   // ----- load deck
   useEffect(() => {
@@ -238,15 +245,34 @@ export default function DeckView({ slug, variant, modes, onBack, showToast }) {
               )}
             </span>
           </div>
+          <div className="px-3 py-1.5 border-b border-slate-800">
+            <ModeFilter
+              modes={pairModes}
+              elementOrder={modes.element_order}
+              value={modeFilter}
+              onChange={onModeFilterChange}
+            />
+          </div>
           <div className="flex-1 overflow-auto thin-scroll">
-            {pair && (
-              <ModePanel
-                modes={pairModes}
-                elementOrder={modes.element_order}
-                values={pair.modes}
-                onChange={updatePairMode}
-              />
-            )}
+            {pair &&
+              (visiblePairModes.length ? (
+                <ModePanel
+                  modes={visiblePairModes}
+                  elementOrder={modes.element_order}
+                  values={pair.modes}
+                  onChange={updatePairMode}
+                />
+              ) : (
+                <div className="p-4 text-center text-sm text-slate-400">
+                  No modes match the filter.
+                  <button
+                    onClick={() => onModeFilterChange(null)}
+                    className="block mx-auto mt-2 text-xs text-indigo-300 hover:text-indigo-200"
+                  >
+                    Show all modes
+                  </button>
+                </div>
+              ))}
           </div>
         </aside>
       </div>

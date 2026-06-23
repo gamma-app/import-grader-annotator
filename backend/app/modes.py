@@ -50,3 +50,35 @@ MODES: List[Dict] = [
 PAIR_MODE_IDS = [m["id"] for m in MODES if m["level"] == "pair"]
 DECK_MODE_IDS = [m["id"] for m in MODES if m["level"] == "deck"]
 MODE_BY_ID = {m["id"]: m for m in MODES}
+
+# Maps each failure mode to its VLM grader in gamma's packages/import-evals/graders.
+# 22 of 24 modes have a 1:1 slide-level grader. The two Nones are intentional:
+#   #18 Brand color remapping  -> deck-level; the import suite is slide-level only.
+#   #21 Flaky / inconsistent   -> cross-slide judgment a single pair grader can't make.
+MODE_GRADERS: Dict[int, str] = {
+    1: "import-logo-dropped",
+    2: "import-headers-footers-dropped",
+    3: "import-text-sizing-spacing",
+    4: "import-divider-mishandling",
+    5: "import-decorations-dropped",
+    6: "import-diagrams-flattened",
+    7: "import-color-zones-misassigned",
+    8: "import-layout-direction-changed",
+    9: "import-icons-dropped-swapped",
+    10: "import-background-images-dropped",
+    11: "import-heading-alignment",
+    12: "import-slides-too-tall",
+    13: "import-forced-accent-treatment",
+    14: "import-table-styling",
+    15: "import-labels-pills",
+    17: "import-chart-data-loss",
+    19: "import-text-color-emphasis-drift",
+    20: "import-forced-component-substitution",
+    22: "import-bullet-styling",
+    23: "import-images-oversized",
+    24: "import-card-borders",
+    25: "import-text-highlight-lost",
+}
+
+# Modes shown in the grading rail that have no VLM grader (UI shows "no AI grader").
+UNGRADEABLE_MODE_IDS = [m["id"] for m in MODES if m["id"] not in MODE_GRADERS]

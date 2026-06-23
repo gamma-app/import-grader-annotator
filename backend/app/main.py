@@ -1,18 +1,19 @@
 """FastAPI app for the Slide-Pair Failure-Mode Grader."""
 from __future__ import annotations
 
-from typing import Dict, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, export, storage
+from . import ai_grader, config, export, storage
 from .modes import (
     DECK_MODE_IDS,
     ELEMENT_ORDER,
     GRADES,
+    MODE_GRADERS,
     MODES,
     PAIR_MODE_IDS,
 )
@@ -45,6 +46,18 @@ class DeckLevelUpdate(BaseModel):
     annotator: Optional[str] = None
 
 
+class AIRunRequest(BaseModel):
+    modes: Optional[List[int]] = None  # subset of mode ids; None = all mapped modes
+    force: bool = False  # re-grade even if a fresh cached result exists
+
+
+class AIBulkRunRequest(BaseModel):
+    scope: Literal["deck", "all"]
+    variant: str
+    slug: Optional[str] = None  # required when scope == "deck"
+    force: bool = False
+
+
 def _cells_to_dict(modes: Dict[str, Cell]) -> Dict[str, Dict]:
     return {k: v.model_dump() for k, v in modes.items()}
 
@@ -63,13 +76,22 @@ def get_modes() -> Dict:
         "grades": GRADES,
         "pair_mode_ids": PAIR_MODE_IDS,
         "deck_mode_ids": DECK_MODE_IDS,
+        "mode_graders": MODE_GRADERS,
         "variants": config.VARIANTS,
     }
 
 
 @app.get("/api/decks")
 def get_decks() -> Dict:
-    return {"decks": storage.list_decks()}
+    decks = storage.list_decks()
+    n_modes = len(ai_grader.gradeable_pair_modes())
+    for d in decks:
+        for vkey, stats in d.get("variants", {}).items():
+            counts = ai_grader.store_counts(d["slug"], vkey)
+            stats["ai_graded"] = counts["graded"]
+            stats["ai_errors"] = counts["errors"]
+            stats["ai_total"] = stats.get("pair_count", 0) * n_modes
+    return {"decks": decks}
 
 
 @app.post("/api/rescan")
@@ -113,6 +135,67 @@ def put_deck_level(slug: str, variant: str, body: DeckLevelUpdate) -> Dict:
     _require_deck(slug)
     _require_variant(variant)
     return {"deck_level": storage.update_deck_level(slug, variant, _cells_to_dict(body.modes), body.annotator)}
+
+
+# ----------------------------------------------------------------- ai graders
+@app.get("/api/ai-grades/status")
+def ai_status() -> Dict:
+    return ai_grader.status()
+
+
+# NOTE: the /run and /jobs routes are declared before /{slug}/{variant} so the
+# 2-segment "/jobs/{job_id}" path isn't captured as slug="jobs".
+@app.post("/api/ai-grades/run")
+def run_ai_bulk(body: AIBulkRunRequest) -> Dict:
+    _require_variant(body.variant)
+    if body.scope == "deck":
+        if not body.slug:
+            raise HTTPException(status_code=400, detail="scope 'deck' requires a slug")
+        _require_deck(body.slug)
+    try:
+        return ai_grader.start_run(body.scope, body.variant, slug=body.slug, force=body.force)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ai_grader.AIGraderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/api/ai-grades/jobs")
+def list_ai_jobs() -> Dict:
+    return ai_grader.list_jobs()
+
+
+@app.get("/api/ai-grades/jobs/{job_id}")
+def get_ai_job(job_id: str) -> Dict:
+    job = ai_grader.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"job '{job_id}' not found")
+    return job
+
+
+@app.post("/api/ai-grades/jobs/{job_id}/cancel")
+def cancel_ai_job(job_id: str) -> Dict:
+    job = ai_grader.cancel_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"job '{job_id}' not found")
+    return job
+
+
+@app.get("/api/ai-grades/{slug}/{variant}")
+def get_ai_grades(slug: str, variant: str) -> Dict:
+    _require_deck(slug)
+    _require_variant(variant)
+    return ai_grader.get_ai_grades(slug, variant)
+
+
+@app.post("/api/ai-grades/{slug}/{variant}/pairs/{index}/run")
+def run_ai_pair(slug: str, variant: str, index: int, body: AIRunRequest) -> Dict:
+    _require_deck(slug)
+    _require_variant(variant)
+    try:
+        return ai_grader.grade_pair(slug, variant, index, modes=body.modes, force=body.force)
+    except ai_grader.AIGraderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 @app.post("/api/export")

@@ -194,3 +194,9 @@ Drive may create a "conflicted copy" of that one `<slug>.json`. Dividing decks a
 `GET /api/decks/{slug}/{variant}` · `PUT /api/decks/{slug}/{variant}/pairs/{index}` ·
 `PUT /api/decks/{slug}/{variant}/deck-level` · `POST /api/export` ·
 images served at `/images/<slug>/{input|ideal|current}/...` (`{variant}` is `ideal` or `current`)
+
+## Design docs
+
+- [`docs/recalibration-design.md`](docs/recalibration-design.md) — planned per-grader
+  **Recalibrate** flow (a prompt-iteration loop that tunes a grader's prompt against human
+  labels). Design only, not yet built.

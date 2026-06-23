@@ -28,4 +28,25 @@ export const api = {
       body: JSON.stringify({ modes }),
     }),
   runExport: () => req('/api/export', { method: 'POST' }),
+
+  // --- AI graders (import-evals via eval-server) ---
+  getAiStatus: () => req('/api/ai-grades/status'),
+  getAiGrades: (slug, variant) =>
+    req(`/api/ai-grades/${encodeURIComponent(slug)}/${variant}`),
+  runAiPair: (slug, variant, index, { modes = null, force = false } = {}) =>
+    req(`/api/ai-grades/${encodeURIComponent(slug)}/${variant}/pairs/${index}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ modes, force }),
+    }),
+
+  // Bulk background runs (deck-wide or all decks for a variant).
+  runAiBulk: ({ scope, variant, slug = null, force = false }) =>
+    req('/api/ai-grades/run', {
+      method: 'POST',
+      body: JSON.stringify({ scope, variant, slug, force }),
+    }),
+  getAiJobs: () => req('/api/ai-grades/jobs'),
+  getAiJob: (jobId) => req(`/api/ai-grades/jobs/${encodeURIComponent(jobId)}`),
+  cancelAiJob: (jobId) =>
+    req(`/api/ai-grades/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
 }

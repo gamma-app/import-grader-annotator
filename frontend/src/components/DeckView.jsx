@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Check, AlertTriangle, Palette, X } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Check, AlertTriangle, Palette, X, Sparkles } from 'lucide-react'
 import { api } from '../api'
 import ImageViewer from './ImageViewer.jsx'
 import ModePanel, { ModeRow } from './ModePanel.jsx'
 import ModeFilter from './ModeFilter.jsx'
+import AiStatusDot from './AiStatusDot.jsx'
 
 export default function DeckView({ slug, variant, modes, modeFilter, onModeFilterChange, onBack, showToast }) {
   const [deck, setDeck] = useState(null)
   const [index, setIndex] = useState(0)
   const [saving, setSaving] = useState(false)
   const [showDeckPanel, setShowDeckPanel] = useState(false)
+  // AI grader (import-evals) — view-only overlay, fetched per slug:variant.
+  const [aiStatus, setAiStatus] = useState(null)
+  const [aiGrades, setAiGrades] = useState({ pairs: {} })
+  const [aiRun, setAiRun] = useState(null) // { active: true } while grading the pair
+  const [regrading, setRegrading] = useState(() => new Set()) // mode ids re-grading now
 
   const deckRef = useRef(deck)
   const timers = useRef({})
@@ -25,6 +31,11 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
     () => (modeFilter ? pairModes.filter((m) => modeFilter.has(m.id)) : pairModes),
     [pairModes, modeFilter],
   )
+  const gradeableIds = useMemo(
+    () => new Set(Object.keys(modes.mode_graders || {}).map(Number)),
+    [modes],
+  )
+  const aiReady = !!(aiStatus && aiStatus.eval_server_reachable && aiStatus.graders_dir_ok)
 
   // ----- load deck
   useEffect(() => {
@@ -49,6 +60,19 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
       alive = false
     }
   }, [slug]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ----- load AI grader status + stored verdicts (DeckView remounts per slug:variant)
+  useEffect(() => {
+    let alive = true
+    api.getAiStatus().then((s) => alive && setAiStatus(s)).catch(() => {})
+    api
+      .getAiGrades(slug, variant)
+      .then((g) => alive && setAiGrades(g && g.pairs ? g : { pairs: {} }))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [slug, variant])
 
   // ----- debounced autosave plumbing
   const schedule = useCallback((key, fn, delay = 600) => {
@@ -134,6 +158,53 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
     [schedule, saveDeckLevel],
   )
 
+  // ----- AI grading (on-demand; view-only, never touches human grades)
+  const mergeAiCells = useCallback((pairIndex, cells) => {
+    setAiGrades((prev) => {
+      const pairs = { ...(prev.pairs || {}) }
+      pairs[String(pairIndex)] = { ...(pairs[String(pairIndex)] || {}), ...cells }
+      return { ...prev, pairs }
+    })
+  }, [])
+
+  const runPairAi = useCallback(
+    async (force = false) => {
+      const p = deckRef.current?.pairs[index]
+      if (!p) return
+      setAiRun({ active: true })
+      try {
+        const res = await api.runAiPair(slug, variant, p.index, { force })
+        mergeAiCells(p.index, res.modes || {})
+      } catch (e) {
+        showToast({ type: 'error', msg: String(e) })
+      } finally {
+        setAiRun(null)
+      }
+    },
+    [slug, variant, index, mergeAiCells, showToast],
+  )
+
+  const regradeMode = useCallback(
+    async (modeId) => {
+      const p = deckRef.current?.pairs[index]
+      if (!p) return
+      setRegrading((s) => new Set(s).add(modeId))
+      try {
+        const res = await api.runAiPair(slug, variant, p.index, { modes: [modeId], force: true })
+        mergeAiCells(p.index, res.modes || {})
+      } catch (e) {
+        showToast({ type: 'error', msg: String(e) })
+      } finally {
+        setRegrading((s) => {
+          const n = new Set(s)
+          n.delete(modeId)
+          return n
+        })
+      }
+    },
+    [slug, variant, index, mergeAiCells, showToast],
+  )
+
   // ----- navigation
   const goto = useCallback(
     (next) => {
@@ -166,6 +237,7 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
   }
 
   const pair = deck.pairs[index]
+  const aiForPair = pair ? aiGrades.pairs?.[String(pair.index)] || {} : {}
   const reviewedCount = deck.pairs.filter((p) => p.reviewed).length
   const total = deck.pairs.length
   const deckGraded = deckModes.every((m) => (deck.deck_level[String(m.id)]?.grade || 'ungraded') !== 'ungraded')
@@ -232,7 +304,7 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
           />
         </div>
 
-        <aside className="w-96 shrink-0 border-l border-slate-800 flex flex-col bg-slate-900">
+        <aside className="w-[40rem] shrink-0 border-l border-slate-800 flex flex-col bg-slate-900">
           <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800">
             <span className="text-sm font-semibold text-slate-200">Slide-level modes</span>
             <span className="flex items-center gap-1 text-xs text-slate-400">
@@ -245,13 +317,28 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
               )}
             </span>
           </div>
-          <div className="px-3 py-1.5 border-b border-slate-800">
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-800">
             <ModeFilter
               modes={pairModes}
               elementOrder={modes.element_order}
               value={modeFilter}
               onChange={onModeFilterChange}
             />
+            <div className="flex-1" />
+            <AiStatusDot status={aiStatus} />
+            <button
+              onClick={() => runPairAi(false)}
+              disabled={aiRun?.active || !aiReady}
+              title={
+                aiStatus && !aiStatus.eval_server_reachable
+                  ? 'Start the eval-server: yarn dev:eval-server'
+                  : 'Run all AI graders for this pair'
+              }
+              className="flex items-center gap-1.5 whitespace-nowrap text-xs px-2 py-1 rounded border border-indigo-600 text-indigo-200 hover:bg-indigo-600/15 disabled:opacity-40"
+            >
+              {aiRun?.active ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+              {aiRun?.active ? 'Grading…' : 'Run AI'}
+            </button>
           </div>
           <div className="flex-1 overflow-auto thin-scroll">
             {pair &&
@@ -261,6 +348,10 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
                   elementOrder={modes.element_order}
                   values={pair.modes}
                   onChange={updatePairMode}
+                  aiByMode={aiForPair}
+                  gradeableIds={gradeableIds}
+                  regradingIds={regrading}
+                  onRegrade={aiReady ? regradeMode : undefined}
                 />
               ) : (
                 <div className="p-4 text-center text-sm text-slate-400">

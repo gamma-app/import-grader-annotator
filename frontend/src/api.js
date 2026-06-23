@@ -29,6 +29,10 @@ export const api = {
     }),
   runExport: () => req('/api/export', { method: 'POST' }),
 
+  // Human-vs-AI agreement report for one pair-level mode + variant.
+  getModeReport: (modeId, variant) =>
+    req(`/api/reports/mode/${modeId}?variant=${variant}`),
+
   // --- AI graders (import-evals via eval-server) ---
   getAiStatus: () => req('/api/ai-grades/status'),
   getAiGrades: (slug, variant) =>

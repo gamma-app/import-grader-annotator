@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai_grader, config, export, storage
+from . import ai_grader, config, export, reports, storage
 from .modes import (
     DECK_MODE_IDS,
     ELEMENT_ORDER,
@@ -196,6 +196,15 @@ def run_ai_pair(slug: str, variant: str, index: int, body: AIRunRequest) -> Dict
         return ai_grader.grade_pair(slug, variant, index, modes=body.modes, force=body.force)
     except ai_grader.AIGraderError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/api/reports/mode/{mode_id}")
+def get_mode_report(mode_id: int, variant: str) -> Dict:
+    """Human-vs-AI agreement report for one pair-level mode + variant."""
+    _require_variant(variant)
+    if mode_id not in MODE_GRADERS:
+        raise HTTPException(status_code=404, detail=f"mode #{mode_id} has no AI grader")
+    return reports.mode_report(mode_id, variant)
 
 
 @app.post("/api/export")

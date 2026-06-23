@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Download, Loader2, Layers } from 'lucide-react'
+import { Download, Loader2, Layers, BarChart3 } from 'lucide-react'
 import { api } from './api'
 import Dashboard from './components/Dashboard.jsx'
 import DeckView from './components/DeckView.jsx'
+import ReportView from './components/ReportView.jsx'
 
 export default function App() {
   const [modes, setModes] = useState(null)
@@ -88,6 +89,16 @@ export default function App() {
 
         <div className="flex-1" />
         <button
+          onClick={() => setView({ name: 'report' })}
+          className={`flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded border transition ${
+            view.name === 'report'
+              ? 'border-indigo-500 text-indigo-200 bg-indigo-600/15'
+              : 'border-slate-700 text-slate-200 hover:bg-slate-800'
+          }`}
+        >
+          <BarChart3 size={16} /> Reports
+        </button>
+        <button
           onClick={onExport}
           disabled={exporting}
           className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium px-3 py-1.5 rounded"
@@ -98,13 +109,14 @@ export default function App() {
       </header>
 
       <main className="flex-1 overflow-hidden">
-        {view.name === 'dashboard' ? (
+        {view.name === 'dashboard' && (
           <Dashboard
             variant={variant}
             onOpen={(slug) => setView({ name: 'deck', slug })}
             showToast={showToast}
           />
-        ) : (
+        )}
+        {view.name === 'deck' && (
           <DeckView
             key={`${view.slug}:${variant}`}
             slug={view.slug}
@@ -114,6 +126,14 @@ export default function App() {
             onModeFilterChange={setModeFilter}
             onBack={() => setView({ name: 'dashboard' })}
             showToast={showToast}
+          />
+        )}
+        {view.name === 'report' && (
+          <ReportView
+            variant={variant}
+            modes={modes}
+            showToast={showToast}
+            onBack={() => setView({ name: 'dashboard' })}
           />
         )}
       </main>

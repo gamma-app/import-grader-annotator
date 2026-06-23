@@ -363,3 +363,17 @@ def deck_summary(slug: str) -> Dict:
 
 def list_decks() -> List[Dict]:
     return [deck_summary(s) for s in list_slugs()]
+
+
+def annotation_variant(slug: str, vkey: str) -> Optional[Dict]:
+    """Read one variant's stored grades (migrated to v2) without rendering.
+
+    Returns the variant dict ({available, alignment, deck_level, pairs, unpaired,
+    ...}) as last saved, or None if the deck has no annotation file / variant yet.
+    Used by read-only consumers (e.g. reports) that must not trigger a re-render.
+    """
+    raw = load_annotation(slug)
+    if not raw:
+        return None
+    ann = _migrate(raw)
+    return ann.get("variants", {}).get(vkey)

@@ -17,15 +17,13 @@ import os
 import re
 import tempfile
 import threading
-import urllib.error
-import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from . import config, storage
+from . import config, llm, storage
 from .modes import MODE_BY_ID, MODE_GRADERS, PAIR_MODE_IDS
 
 
@@ -66,7 +64,10 @@ def _model_from_yaml(text: str) -> Optional[str]:
 
 
 def load_grader(grader_name: str) -> Dict:
-    """Load + cache a grader's prompt + model. Returns name/model/prompt/prompt_hash."""
+    """Load + cache a grader's prompt + model. Returns name/model/prompt/prompt_hash.
+
+    The prompt is read straight from the git-tracked ``prompt.md`` (the single
+    source of truth); a reinit rewrites that file via :func:`write_grader_prompt`."""
     gdir = _graders_dir() / grader_name
     prompt_path = gdir / "prompt.md"
     yml_path = gdir / "grader.yml"
@@ -98,50 +99,37 @@ def load_grader(grader_name: str) -> Dict:
     return rec
 
 
-# --------------------------------------------------------------- eval-server
-# The eval-server's /run-grader builds the prompt with hardcoded `input`/`output`
-# image headers, so we send the two PNGs under those keys and add a short note
-# mapping them onto the rubric's input_slide / output_slide naming.
-_LABEL_NOTE = (
-    "\n\n---\n\n"
-    "Note on the two images in the Data section below: the image under **input** "
-    "is `input_slide` (the original source slide); the image under **output** is "
-    "`output_slide` (the imported version)."
-)
+def write_grader_prompt(grader_name: str, prompt: str) -> Path:
+    """Rewrite a grader's ``prompt.md`` in place (atomic) and bust the cache.
 
-
-def _post_run_grader(prompt: str, model: str, input_url: str, output_url: str,
-                     timeout: float = 180.0) -> Dict:
-    body = json.dumps({
-        "prompt": prompt + _LABEL_NOTE,
-        "model": model,
-        "input": input_url,
-        "output": output_url,
-        "imageVariables": ["input", "output"],
-        "temperature": 0,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"{config.EVAL_SERVER_URL}/run-grader",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    This is the single source of truth in git — a reinit writes here, then the
+    user commits + pushes from the tool. Returns the prompt.md path."""
+    gdir = _graders_dir() / grader_name
+    if not gdir.is_dir():
+        raise AIGraderError(f"grader '{grader_name}' dir not found: {gdir}")
+    prompt_path = gdir / "prompt.md"
+    text = prompt.rstrip("\n") + "\n"
+    fd, tmp = tempfile.mkstemp(dir=str(gdir), suffix=".tmp")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:500]
-        raise AIGraderError(f"eval-server {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise AIGraderError(
-            f"eval-server unreachable at {config.EVAL_SERVER_URL} "
-            f"(is `yarn dev:eval-server` running?): {exc.reason}"
-        ) from exc
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, prompt_path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    with _grader_cache_lock:
+        _grader_cache.pop(grader_name, None)
+    return prompt_path
+
+
+# ----------------------------------------------------------- grading transport
+# Grading runs in-process via llm.run_grader (Anthropic), reading the rendered
+# PNGs straight off disk. See llm.py for the request/response shape.
 
 
 # --------------------------------------------------------------- response parse
-_VERDICTS = ("pass", "borderline", "fail", "skip")
-_VERDICT_RE = re.compile(r'"verdict"\s*:\s*"(pass|borderline|fail|skip)"', re.IGNORECASE)
+_VERDICTS = ("pass", "borderline", "fail", "na", "skip")
+_VERDICT_RE = re.compile(r'"verdict"\s*:\s*"(pass|borderline|fail|na|skip)"', re.IGNORECASE)
 _REASON_RE = re.compile(r'"reason"\s*:\s*"((?:[^"\\]|\\.)*)"', re.IGNORECASE)
 
 
@@ -183,7 +171,7 @@ def parse_verdict(raw: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
         return vm.group(1).lower(), reason
 
     # Legacy line format: "VERDICT: PASS\nREASON: ..."
-    lm = re.search(r"VERDICT:\s*(PASS|BORDERLINE|FAIL|SKIP)", raw, re.IGNORECASE)
+    lm = re.search(r"VERDICT:\s*(PASS|BORDERLINE|FAIL|NA|SKIP)", raw, re.IGNORECASE)
     if lm:
         rl = re.search(r"REASON:\s*(.+)", raw, re.IGNORECASE)
         return lm.group(1).lower(), (rl.group(1).strip() if rl else None)
@@ -244,8 +232,15 @@ def get_ai_grades(slug: str, variant: str) -> Dict:
 
 
 # --------------------------------------------------------------- grading
-def _abs_image_url(rel_url: str) -> str:
-    return f"{config.SELF_BASE_URL}{rel_url}"
+def _image_path(rel_url: str) -> Path:
+    """Map a pair image URL ('/images/<slug>/<side>/<name>') to its file on disk.
+
+    '/images' is mounted to RENDER_CACHE_DIR, so stripping that prefix yields the
+    local PNG path the in-process grader reads + base64-encodes."""
+    rel = rel_url.split("?", 1)[0]
+    if rel.startswith("/images/"):
+        rel = rel[len("/images/"):]
+    return config.RENDER_CACHE_DIR / rel
 
 
 def _find_pair(detail: Dict, index: int) -> Optional[Dict]:
@@ -271,8 +266,8 @@ def grade_pair_mode(
     mode_id: int,
     *,
     force: bool = False,
-    input_url: Optional[str] = None,
-    output_url: Optional[str] = None,
+    input_path: Optional[Path] = None,
+    output_path: Optional[Path] = None,
     persist: bool = True,
 ) -> Dict:
     """Grade a single (pair, mode). Skips the model call if a fresh cached result
@@ -292,20 +287,20 @@ def grade_pair_mode(
             not force
             and existing
             and existing.get("prompt_hash") == grader["prompt_hash"]
-            and existing.get("verdict") in ("pass", "borderline", "fail")
+            and existing.get("verdict") in ("pass", "borderline", "fail", "na")
         ):
             return existing
 
-    # Resolve the two image URLs if the caller didn't pre-supply them.
-    if input_url is None or output_url is None:
+    # Resolve the two image file paths if the caller didn't pre-supply them.
+    if input_path is None or output_path is None:
         detail = storage.get_deck_detail(slug, variant)
         pair = _find_pair(detail, index)
         if pair is None:
             raise AIGraderError(f"pair {index} not found in {slug}/{variant}")
-        input_url = _abs_image_url(pair["input_image"])
-        output_url = _abs_image_url(pair["output_image"])
+        input_path = _image_path(pair["input_image"])
+        output_path = _image_path(pair["output_image"])
 
-    result = _post_run_grader(grader["prompt"], grader["model"], input_url, output_url)
+    result = llm.run_grader(grader["prompt"], grader["model"], input_path, output_path)
     raw = result.get("rawResponse")
     server_error = result.get("error")
     verdict, reason = parse_verdict(raw)
@@ -350,8 +345,8 @@ def grade_pair(
     pair = _find_pair(detail, index)
     if pair is None:
         raise AIGraderError(f"pair {index} not found in {slug}/{variant}")
-    input_url = _abs_image_url(pair["input_image"])
-    output_url = _abs_image_url(pair["output_image"])
+    input_path = _image_path(pair["input_image"])
+    output_path = _image_path(pair["output_image"])
 
     mode_ids = gradeable_pair_modes(modes)
     results: Dict[str, Dict] = {}
@@ -361,7 +356,7 @@ def grade_pair(
     def _task(mode_id: int) -> Tuple[int, Dict]:
         return mode_id, grade_pair_mode(
             slug, variant, index, mode_id,
-            force=force, input_url=input_url, output_url=output_url,
+            force=force, input_path=input_path, output_path=output_path,
         )
 
     workers = max(1, min(config.AI_GRADER_CONCURRENCY, len(mode_ids)))
@@ -373,7 +368,7 @@ def grade_pair(
 
 # --------------------------------------------------------------- status
 def status() -> Dict:
-    """Config/health for the UI: graders dir present + eval-server reachable."""
+    """Config/health for the UI: graders present + Anthropic key configured."""
     graders_dir = config.IMPORT_EVALS_GRADERS_DIR
     dir_ok = bool(graders_dir and graders_dir.is_dir())
     missing: List[str] = []
@@ -382,25 +377,17 @@ def status() -> Dict:
             if not (graders_dir / gname / "prompt.md").exists():
                 missing.append(gname)
 
-    server_ok = False
-    server_error: Optional[str] = None
-    try:
-        req = urllib.request.Request(f"{config.EVAL_SERVER_URL}/graders", method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            server_ok = 200 <= resp.status < 300
-    except Exception as exc:  # noqa: BLE001 - report any reachability failure
-        server_error = str(exc)
-
+    llm_ok = llm.configured()
     return {
-        "eval_server_url": config.EVAL_SERVER_URL,
-        "eval_server_reachable": server_ok,
-        "eval_server_error": server_error,
-        "self_base_url": config.SELF_BASE_URL,
+        "llm_configured": llm_ok,
+        "model": config.AI_GRADER_MODEL or None,
         "graders_dir": str(graders_dir) if graders_dir else None,
         "graders_dir_ok": dir_ok,
         "graders_expected": len(MODE_GRADERS),
         "graders_present": len(MODE_GRADERS) - len(missing) if dir_ok else 0,
         "graders_missing": missing,
+        # Back-compat alias for any UI still reading the old field name.
+        "eval_server_reachable": llm_ok,
     }
 
 
@@ -412,11 +399,59 @@ def store_counts(slug: str, variant: str) -> Dict:
     for cells in store.get("pairs", {}).values():
         for cell in cells.values():
             v = cell.get("verdict")
-            if v in ("pass", "borderline", "fail"):
+            if v in ("pass", "borderline", "fail", "na"):
                 graded += 1
             elif v == "error":
                 errors += 1
     return {"graded": graded, "errors": errors}
+
+
+def _iter_store_files() -> List[Path]:
+    if not config.AI_GRADES_DIR.is_dir():
+        return []
+    return sorted(config.AI_GRADES_DIR.glob("*.json"))
+
+
+def count_ai_grades_for_mode(mode_id: int) -> int:
+    """How many stored AI cells exist for a mode across all decks/variants."""
+    mid = str(mode_id)
+    total = 0
+    for path in _iter_store_files():
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        for cells in data.get("pairs", {}).values():
+            if mid in cells:
+                total += 1
+    return total
+
+
+def clear_ai_grades_for_mode(mode_id: int) -> int:
+    """Remove a mode's AI verdicts from every (deck, variant) store.
+
+    Used when a grader prompt is reinitialized: its old scores no longer reflect
+    the new prompt and must be re-run. Returns the number of cells removed."""
+    mid = str(mode_id)
+    removed = 0
+    for path in _iter_store_files():
+        stem = path.stem
+        if "__" not in stem:
+            continue
+        slug, _, variant = stem.rpartition("__")
+        with _store_lock(f"{slug}__{variant}"):
+            store = load_ai_grades(slug, variant)
+            changed = False
+            for cells in store.get("pairs", {}).values():
+                if mid in cells:
+                    del cells[mid]
+                    removed += 1
+                    changed = True
+            if changed:
+                store["updated_at"] = _now()
+                _save_ai_grades(slug, variant, store)
+    return removed
 
 
 # --------------------------------------------------------------- bulk jobs
@@ -486,10 +521,10 @@ def start_run(scope: str, variant: str, *, slug: Optional[str] = None, force: bo
     if variant not in config.VARIANT_BY_KEY:
         raise ValueError(f"unknown variant '{variant}'")
     st = status()
-    if not st["eval_server_reachable"]:
-        raise AIGraderError(st.get("eval_server_error") or f"eval-server unreachable at {config.EVAL_SERVER_URL}")
+    if not st["llm_configured"]:
+        raise AIGraderError("ANTHROPIC_API_KEY is not set in .env (copy it from gamma's .envrc)")
     if not st["graders_dir_ok"]:
-        raise AIGraderError("graders dir not found — set IMPORT_EVALS_GRADERS_DIR in .env")
+        raise AIGraderError("graders dir not found — expected vendored backend/graders/")
 
     units = _enumerate_units(scope, variant, slug)
 

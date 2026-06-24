@@ -72,7 +72,7 @@ function DeckCard({ d, stats, onOpen, aiReady, jobActive, activeSlug, onRunDeck 
               onRunDeck(d.slug)
             }}
             disabled={!aiReady || jobActive}
-            title={aiReady ? 'Grade this whole deck with AI' : 'AI grader unavailable — start the eval-server'}
+            title={aiReady ? 'Grade this whole deck with AI' : 'AI grader unavailable — set ANTHROPIC_API_KEY in .env'}
             className="shrink-0 flex items-center gap-1 whitespace-nowrap text-[11px] px-2 py-1 rounded border border-indigo-600/60 text-indigo-200 hover:bg-indigo-600/15 disabled:opacity-40"
           >
             {grading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
@@ -111,7 +111,7 @@ export default function Dashboard({ variant, onOpen, showToast }) {
   const [job, setJob] = useState(null)
   const pollRef = useRef(null)
 
-  const aiReady = !!(aiStatus && aiStatus.eval_server_reachable && aiStatus.graders_dir_ok)
+  const aiReady = !!(aiStatus && aiStatus.llm_configured && aiStatus.graders_dir_ok)
   const jobActive = !!(job && (job.status === 'running' || job.status === 'cancelling'))
 
   const load = () =>
@@ -245,7 +245,7 @@ export default function Dashboard({ variant, onOpen, showToast }) {
             <button
               onClick={() => startRun('all')}
               disabled={!aiReady || jobActive}
-              title={aiReady ? 'Grade every available deck for this variant' : 'AI grader unavailable — start the eval-server'}
+              title={aiReady ? 'Grade every available deck for this variant' : 'AI grader unavailable — set ANTHROPIC_API_KEY in .env'}
               className="flex items-center gap-2 text-sm border border-indigo-600 text-indigo-200 hover:bg-indigo-600/15 disabled:opacity-40 px-3 py-1.5 rounded"
             >
               {jobActive && job?.scope === 'all' ? (

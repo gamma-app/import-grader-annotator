@@ -35,7 +35,7 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
     () => new Set(Object.keys(modes.mode_graders || {}).map(Number)),
     [modes],
   )
-  const aiReady = !!(aiStatus && aiStatus.eval_server_reachable && aiStatus.graders_dir_ok)
+  const aiReady = !!(aiStatus && aiStatus.llm_configured && aiStatus.graders_dir_ok)
 
   // ----- load deck
   useEffect(() => {
@@ -330,8 +330,8 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
               onClick={() => runPairAi(false)}
               disabled={aiRun?.active || !aiReady}
               title={
-                aiStatus && !aiStatus.eval_server_reachable
-                  ? 'Start the eval-server: yarn dev:eval-server'
+                aiStatus && !aiStatus.llm_configured
+                  ? 'Set ANTHROPIC_API_KEY in .env (copy from gamma .envrc)'
                   : 'Run all AI graders for this pair'
               }
               className="flex items-center gap-1.5 whitespace-nowrap text-xs px-2 py-1 rounded border border-indigo-600 text-indigo-200 hover:bg-indigo-600/15 disabled:opacity-40"

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Download, Loader2, Layers, BarChart3 } from 'lucide-react'
+import { Download, Loader2, Layers, BarChart3, BookOpen } from 'lucide-react'
 import { api } from './api'
 import Dashboard from './components/Dashboard.jsx'
 import DeckView from './components/DeckView.jsx'
 import ReportView from './components/ReportView.jsx'
+import ModeDirectory from './components/ModeDirectory.jsx'
 
 export default function App() {
   const [modes, setModes] = useState(null)
@@ -99,6 +100,16 @@ export default function App() {
           <BarChart3 size={16} /> Reports
         </button>
         <button
+          onClick={() => setView({ name: 'directory' })}
+          className={`flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded border transition ${
+            view.name === 'directory'
+              ? 'border-indigo-500 text-indigo-200 bg-indigo-600/15'
+              : 'border-slate-700 text-slate-200 hover:bg-slate-800'
+          }`}
+        >
+          <BookOpen size={16} /> Directory
+        </button>
+        <button
           onClick={onExport}
           disabled={exporting}
           className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium px-3 py-1.5 rounded"
@@ -135,6 +146,9 @@ export default function App() {
             showToast={showToast}
             onBack={() => setView({ name: 'dashboard' })}
           />
+        )}
+        {view.name === 'directory' && (
+          <ModeDirectory showToast={showToast} onBack={() => setView({ name: 'dashboard' })} />
         )}
       </main>
 

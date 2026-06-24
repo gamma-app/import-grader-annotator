@@ -33,7 +33,27 @@ export const api = {
   getModeReport: (modeId, variant) =>
     req(`/api/reports/mode/${modeId}?variant=${variant}`),
 
-  // --- AI graders (import-evals via eval-server) ---
+  // Failure Mode Directory: registry + grader prompts + editable descriptions.
+  getModeDirectory: () => req('/api/mode-directory'),
+  saveModeDescription: (modeId, text) =>
+    req(`/api/modes/${modeId}/description`, {
+      method: 'PUT',
+      body: JSON.stringify({ text }),
+    }),
+  getGraderScoreCount: (modeId) => req(`/api/modes/${modeId}/grader-score-count`),
+  reinitializeGrader: (modeId) =>
+    req(`/api/modes/${modeId}/reinitialize-grader`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  commitGrader: (modeId, message) =>
+    req(`/api/modes/${modeId}/commit-grader`, {
+      method: 'POST',
+      body: JSON.stringify(message ? { message } : {}),
+    }),
+  getGitStatus: () => req('/api/git/status'),
+
+  // --- AI graders (in-process Anthropic VLM grading) ---
   getAiStatus: () => req('/api/ai-grades/status'),
   getAiGrades: (slug, variant) =>
     req(`/api/ai-grades/${encodeURIComponent(slug)}/${variant}`),

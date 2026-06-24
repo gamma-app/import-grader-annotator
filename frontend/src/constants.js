@@ -1,6 +1,6 @@
 // Shared UI metadata for grades and severities.
 
-export const GRADE_ORDER = ['pass', 'borderline', 'fail']
+export const GRADE_ORDER = ['pass', 'borderline', 'fail', 'na']
 
 export const GRADE_META = {
   pass: {
@@ -18,12 +18,18 @@ export const GRADE_META = {
     active: 'bg-rose-500 text-white border-rose-500',
     idle: 'border-slate-600 text-rose-300 hover:bg-rose-500/10',
   },
+  na: {
+    label: 'N/A',
+    active: 'bg-slate-500 text-white border-slate-500',
+    idle: 'border-slate-600 text-slate-300 hover:bg-slate-600/20',
+  },
 }
 
 export const GRADE_DOT = {
   pass: 'bg-emerald-500',
   borderline: 'bg-amber-500',
   fail: 'bg-rose-500',
+  na: 'bg-slate-400',
   ungraded: 'bg-slate-600',
 }
 
@@ -38,6 +44,7 @@ export const AI_VERDICT_CHIP = {
   pass: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40',
   borderline: 'bg-amber-500/20 text-amber-300 border border-amber-500/40',
   fail: 'bg-rose-500/20 text-rose-300 border border-rose-500/40',
+  na: 'bg-slate-600/30 text-slate-300 border border-slate-500/40',
   error: 'bg-slate-600/30 text-slate-300 border border-slate-500/40',
   skip: 'bg-slate-600/30 text-slate-400 border border-slate-500/40',
 }
@@ -46,6 +53,7 @@ export const AI_VERDICT_LABEL = {
   pass: 'Pass',
   borderline: 'Borderline',
   fail: 'Fail',
+  na: 'N/A',
   error: 'Error',
   skip: 'Skip',
 }

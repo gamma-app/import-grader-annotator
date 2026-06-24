@@ -125,6 +125,53 @@ def save_annotation(slug: str, data: Dict) -> None:
             os.remove(tmp)
 
 
+# ------------------------------------------------------------- mode descriptions
+# Human-authored failure-mode descriptions, stored once for the workspace (not
+# per deck/variant) since the taxonomy + grader prompts are variant-independent.
+_mode_desc_lock = threading.RLock()
+_MODE_DESC_SCHEMA = 1
+
+
+def load_mode_descriptions() -> Dict:
+    path = config.MODE_DESCRIPTIONS_PATH
+    if not path.exists():
+        return {"schema_version": _MODE_DESC_SCHEMA, "updated_at": _now(), "descriptions": {}}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"schema_version": _MODE_DESC_SCHEMA, "updated_at": _now(), "descriptions": {}}
+    data.setdefault("descriptions", {})
+    return data
+
+
+def _save_mode_descriptions(data: Dict) -> None:
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.MODE_DESCRIPTIONS_PATH
+    fd, tmp = tempfile.mkstemp(dir=str(config.DATA_DIR), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def set_mode_description(mode_id: int, text: str, annotator: Optional[str] = None) -> Dict:
+    now = _now()
+    with _mode_desc_lock:
+        data = load_mode_descriptions()
+        entry: Dict = {"text": text, "updated_at": now}
+        if annotator:
+            entry["updated_by"] = annotator
+        data.setdefault("descriptions", {})[str(mode_id)] = entry
+        data["updated_at"] = now
+        data["schema_version"] = _MODE_DESC_SCHEMA
+        _save_mode_descriptions(data)
+        return entry
+
+
 def _pair_reviewed(modes: Dict[str, Dict]) -> bool:
     return all(modes.get(str(mid), _default_cell())["grade"] != "ungraded" for mid in PAIR_MODE_IDS)
 

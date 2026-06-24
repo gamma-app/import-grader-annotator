@@ -18,7 +18,7 @@ ELEMENT_ORDER = [
     "Card & composition",
 ]
 
-GRADES = ["ungraded", "pass", "borderline", "fail"]
+GRADES = ["ungraded", "pass", "borderline", "fail", "na"]
 
 MODES: List[Dict] = [
     {"id": 1, "name": "Logo dropped", "element": "Images", "dimension": "Presence", "severity": "P1", "level": "pair"},
@@ -82,3 +82,9 @@ MODE_GRADERS: Dict[int, str] = {
 
 # Modes shown in the grading rail that have no VLM grader (UI shows "no AI grader").
 UNGRADEABLE_MODE_IDS = [m["id"] for m in MODES if m["id"] not in MODE_GRADERS]
+
+# Why the ungradeable modes have no per-pair VLM grader (shown in the directory).
+MODE_GRADER_NOTES: Dict[int, str] = {
+    18: "Graded once per deck (brand color remapping); the import suite is slide-level only.",
+    21: "Requires cross-slide judgment a single per-pair grader can't make.",
+}

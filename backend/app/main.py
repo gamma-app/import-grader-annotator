@@ -8,11 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai_grader, config, export, reports, storage
+from . import ai_grader, config, export, gitutil, grader_author, reports, storage
 from .modes import (
     DECK_MODE_IDS,
     ELEMENT_ORDER,
     GRADES,
+    MODE_BY_ID,
+    MODE_GRADER_NOTES,
     MODE_GRADERS,
     MODES,
     PAIR_MODE_IDS,
@@ -32,7 +34,7 @@ app.add_middleware(
 
 # ----------------------------------------------------------------- models
 class Cell(BaseModel):
-    grade: Literal["ungraded", "pass", "borderline", "fail"] = "ungraded"
+    grade: Literal["ungraded", "pass", "borderline", "fail", "na"] = "ungraded"
     note: str = ""
 
 
@@ -43,6 +45,20 @@ class PairUpdate(BaseModel):
 
 class DeckLevelUpdate(BaseModel):
     modes: Dict[str, Cell]
+    annotator: Optional[str] = None
+
+
+class ModeDescriptionUpdate(BaseModel):
+    text: str = ""
+    annotator: Optional[str] = None
+
+
+class ReinitGraderRequest(BaseModel):
+    annotator: Optional[str] = None
+
+
+class CommitGraderRequest(BaseModel):
+    message: Optional[str] = None
     annotator: Optional[str] = None
 
 
@@ -79,6 +95,107 @@ def get_modes() -> Dict:
         "mode_graders": MODE_GRADERS,
         "variants": config.VARIANTS,
     }
+
+
+@app.get("/api/mode-directory")
+def get_mode_directory() -> Dict:
+    """Every failure mode + its editable description + its VLM grader prompt."""
+    descs = storage.load_mode_descriptions().get("descriptions", {})
+    git_state = gitutil.graders_status()
+    dirty = set(git_state.get("dirty_graders") or [])
+    out: List[Dict] = []
+    for m in MODES:
+        entry = descs.get(str(m["id"]), {})
+        rec = {
+            **m,
+            "description": entry.get("text", ""),
+            "description_updated_at": entry.get("updated_at"),
+            "grader_name": None,
+            "model": None,
+            "prompt": None,
+            "prompt_hash": None,
+            "prompt_status": "no_grader",
+            "prompt_message": "",
+            "uncommitted": False,
+        }
+        grader = MODE_GRADERS.get(m["id"])
+        if not grader:
+            rec["prompt_message"] = MODE_GRADER_NOTES.get(m["id"], "No VLM grader for this mode.")
+        else:
+            rec["grader_name"] = grader
+            try:
+                g = ai_grader.load_grader(grader)
+                rec["model"] = g["model"]
+                rec["prompt"] = g["prompt"]
+                rec["prompt_hash"] = g["prompt_hash"]
+                rec["prompt_status"] = "ok"
+                rec["uncommitted"] = grader in dirty
+            except ai_grader.AIGraderError as exc:
+                rec["prompt_status"] = "unavailable"
+                rec["prompt_message"] = str(exc)
+        out.append(rec)
+    return {"modes": out, "element_order": ELEMENT_ORDER, "git": git_state}
+
+
+@app.put("/api/modes/{mode_id}/description")
+def put_mode_description(mode_id: int, body: ModeDescriptionUpdate) -> Dict:
+    if mode_id not in MODE_BY_ID:
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    return storage.set_mode_description(mode_id, body.text, body.annotator)
+
+
+@app.get("/api/modes/{mode_id}/grader-score-count")
+def grader_score_count(mode_id: int) -> Dict:
+    if mode_id not in MODE_BY_ID:
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    return {"mode_id": mode_id, "count": ai_grader.count_ai_grades_for_mode(mode_id)}
+
+
+@app.post("/api/modes/{mode_id}/reinitialize-grader")
+def reinitialize_grader(mode_id: int, body: ReinitGraderRequest) -> Dict:
+    """Regenerate a mode's VLM grader prompt from its description, write it to the
+    git-tracked prompt.md, and clear that grader's AI scores (they must be re-run).
+    The new prompt is left uncommitted for the user to review then commit + push."""
+    if mode_id not in MODE_BY_ID:
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    try:
+        gen = grader_author.generate_prompt(mode_id)
+    except grader_author.GraderAuthorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    ai_grader.write_grader_prompt(gen["grader_name"], gen["prompt"])
+    cleared = ai_grader.clear_ai_grades_for_mode(mode_id)
+    return {
+        "mode_id": mode_id,
+        "grader_name": gen["grader_name"],
+        "model": gen["model"],
+        "prompt": gen["prompt"],
+        "cleared": cleared,
+        "latency_ms": gen.get("latency_ms"),
+        "uncommitted": True,
+    }
+
+
+@app.post("/api/modes/{mode_id}/commit-grader")
+def commit_grader(mode_id: int, body: CommitGraderRequest) -> Dict:
+    """Commit + push this mode's grader prompt to GitHub. Scoped to the grader's
+    files via a pathspec so unrelated working-tree changes are never swept in."""
+    if mode_id not in MODE_BY_ID:
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    grader = MODE_GRADERS.get(mode_id)
+    if not grader:
+        raise HTTPException(status_code=400, detail=f"mode #{mode_id} has no VLM grader")
+    mode = MODE_BY_ID[mode_id]
+    message = (body.message or "").strip() or f'graders: reinitialize "{mode["name"]}" prompt (#{mode_id})'
+    res = gitutil.commit_and_push([grader], message)
+    if res.get("error") and not res.get("committed"):
+        raise HTTPException(status_code=502, detail=res["error"])
+    return {"mode_id": mode_id, "grader_name": grader, **res}
+
+
+@app.get("/api/git/status")
+def git_status() -> Dict:
+    """Git state of the graders dir (branch, ahead/behind, uncommitted graders)."""
+    return gitutil.graders_status()
 
 
 @app.get("/api/decks")

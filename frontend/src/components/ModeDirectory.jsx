@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, BookOpen, Loader2, Search, Copy, Check, AlertTriangle, Sparkles, RefreshCw, GitBranch, UploadCloud } from 'lucide-react'
 import { api } from '../api'
 
@@ -23,6 +23,24 @@ function SaveStatus({ status }) {
   if (status === 'error') return <span className="text-xs text-rose-400">Save failed</span>
   if (status === 'typing') return <span className="text-xs text-slate-500">Editing…</span>
   return null
+}
+
+// Textarea that grows to fit its content so the whole description is visible
+// without an inner scrollbar or manual resizing.
+function AutoGrowTextarea({ value, ...props }) {
+  const ref = useRef(null)
+  const fit = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`
+  }, [])
+  useLayoutEffect(fit, [value, fit])
+  useEffect(() => {
+    window.addEventListener('resize', fit)
+    return () => window.removeEventListener('resize', fit)
+  }, [fit])
+  return <textarea ref={ref} value={value} {...props} />
 }
 
 function PromptBlock({ mode }) {
@@ -370,14 +388,13 @@ export default function ModeDirectory({ onBack, showToast }) {
                   <label className="text-sm font-medium text-slate-300">Description</label>
                   <SaveStatus status={status} />
                 </div>
-                <textarea
+                <AutoGrowTextarea
                   key={selected.id}
                   value={textFor(selected)}
                   onChange={(e) => onChange(selected.id, e.target.value)}
                   onBlur={flush}
                   placeholder="Describe this failure mode… (saved automatically)"
-                  rows={5}
-                  className="w-full bg-slate-800/60 border border-slate-700 rounded-lg p-3 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 resize-y leading-relaxed"
+                  className="w-full bg-slate-800/60 border border-slate-700 rounded-lg p-3 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 resize-none overflow-hidden leading-relaxed min-h-[6rem]"
                 />
               </div>
 

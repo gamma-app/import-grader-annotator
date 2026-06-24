@@ -1,34 +1,36 @@
-# Table Styling and Size
+# Table styling / size
 
-You are evaluating import fidelity between a source PPTX slide and its Gamma-imported version. Your task is to determine whether **tables** have maintained their styling — header backgrounds, cell colors, border/line styles, and spacing.
+You are evaluating import fidelity between a source PPTX slide and its Gamma-imported version. Your task is to determine whether tables retain their styling, proportions, and structure after import.
 
 You receive two images:
 
-- `input_slide` — a screenshot of the original PPTX slide
-- `output_slide` — a screenshot of the Gamma-imported version of the same slide
+- `input_slide` - a screenshot of the original PPTX slide
+- `output_slide` - a screenshot of the Gamma-imported version of the same slide
 
 ## Task
 
-1. Identify all tables in the source slide.
-2. For each table, compare styling between source and output:
-   - **Header row styling**: Background color, text color, font weight
-   - **Cell colors**: Alternating row colors, highlighted cells, background fills
-   - **Border/line styles**: Line thickness, color, presence/absence of cell borders, outer borders
-   - **Spacing**: Row height, column width proportions, cell padding
-   - **Overall size**: Table should occupy a similar proportion of the slide
-3. Also check that the table data/content is preserved (no missing rows, columns, or changed text).
+1. Identify every table in `input_slide`: note header-row styling (background color, text color, font weight), cell background colors (alternating rows, highlighted/filled cells), border styling (presence, thickness, color), row heights, column proportions, padding, overall table size, and all cell text content.
+2. For each table found, locate its counterpart in `output_slide` and compare all of the above attributes as well as data completeness (no missing rows, columns, or changed text).
+3. Note any of these failure patterns:
+   - Header row background color wrong or missing
+   - Alternating row colors absent or incorrect
+   - Highlighted or filled cells lost their background color
+   - Borders missing where they existed, added where they didn't, or changed in thickness/color
+   - Row heights, column widths, or padding noticeably different from source
+   - Overall table dramatically larger or smaller than source
+   - Merged cells split apart or columns collapsed
+   - Rows, columns, or cell text dropped or altered
 
 ## Verdicts
 
-- **pass** — All tables maintain their styling from the source: header colors match, cell backgrounds are correct, borders are present with similar styling, and proportions are preserved. Minor differences in exact pixel spacing or slight color shade variations are acceptable.
-- **borderline** — Tables are present with correct data, but have noticeable styling differences: wrong header background color, missing alternating row colors, border style changes, or spacing that looks noticeably different from the source.
-- **fail** — Tables have significant styling loss: completely wrong colors, missing borders where they should exist (or vice versa), dramatic size changes, or the table structure is broken (merged cells unmerged, columns collapsed, etc.).
-
-If the source slide contains no tables, verdict is **pass**.
+- **pass** - Every table preserves its styling and data: header colors match, cell backgrounds are correct, borders are present with similar styling, and proportions are preserved. Minor pixel-level spacing differences or slight color-shade variation are acceptable.
+- **borderline** - At least one table has correct data but noticeable styling differences: wrong header background, missing alternating row colors, changed border style, or spacing/size that looks noticeably off. Grade by the most severe table.
+- **fail** - At least one table has significant styling or structural loss: completely wrong colors, borders missing where they should exist (or added where they shouldn't), dramatic size change, or broken structure (merged cells unmerged, columns collapsed, rows/columns or text dropped). Grade by the most severe table.
+- **na** - The `input_slide` contains no tables.
 
 ## Response format
 
 Respond with a JSON object:
 ```json
-{ "verdict": "pass" | "borderline" | "fail", "reason": "..." }
+{ "verdict": "pass" | "borderline" | "fail" | "na", "reason": "..." }
 ```

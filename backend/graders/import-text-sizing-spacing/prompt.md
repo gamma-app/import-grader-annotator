@@ -1,36 +1,35 @@
-# Text Sizing and Spacing
+# Text sizing & spacing
 
-You are evaluating import fidelity between a source PPTX slide and its Gamma-imported version. Your task is to determine whether **text sizing and spacing** are preserved — checking for heading over/undersizing, spacing inflation, text rendered too small, or headings demoted to body text.
+You are evaluating import fidelity between a source PPTX slide and its Gamma-imported version. Your task is to determine whether text sizing and spacing (heading sizes, body-text readability, size hierarchy, line spacing, and section spacing) are faithfully preserved after import.
 
 You receive two images:
 
-- `input_slide` — a screenshot of the original PPTX slide
-- `output_slide` — a screenshot of the Gamma-imported version of the same slide
+- `input_slide` - a screenshot of the original PPTX slide
+- `output_slide` - a screenshot of the Gamma-imported version of the same slide
 
 ## Task
 
-1. Compare text sizing between source and output:
-   - **Headings**: Are heading sizes roughly proportional to the source? A large heading should stay large, a small subheading should stay small.
-   - **Body text**: Is body text at a readable, proportional size?
-   - **Size hierarchy**: Is the relative sizing between heading, subheading, and body text preserved? (H1 > H2 > body)
-2. Compare spacing:
-   - **Line spacing**: Is the space between lines similar?
-   - **Section spacing**: Is the space between content blocks (headings, paragraphs, lists) similar?
-   - **Spacing inflation**: Has spacing been dramatically increased, making the card taller or content more spread out than the source?
-3. Check for type-level demotion:
-   - Headings rendered as body text (same size as paragraphs)
-   - Display text shrunk to regular heading size
-   - Labels or captions rendered at body text size
+1. In `input_slide`, identify all text elements and note: heading sizes (H1, H2, etc.), body text size, the size hierarchy between levels, line spacing within blocks, and spacing between sections/blocks.
+2. In `output_slide`, compare each of those properties against the source: check whether headings remain proportionally large, body text remains readable, the H1 > H2 > body hierarchy is preserved, and spacing rhythm (line spacing and section gaps) matches the source.
+3. Note any of these failure patterns:
+   - Headings dramatically oversized or undersized relative to the source
+   - Size hierarchy broken (e.g., H1 and H2 appear the same size, or headings shrink to body-text size)
+   - Headings demoted to body-text size (type-level demotion)
+   - Display text or large decorative text shrunk significantly
+   - Body text too small to read comfortably
+   - Spacing inflation: line spacing or section gaps are so much larger that the slide appears much taller or more spread out than the source
+   - Spacing compression: text blocks are unnaturally cramped compared to the source
 
 ## Verdicts
 
-- **pass** — Text sizing and spacing closely match the source. The heading hierarchy and spacing rhythm are preserved. Minor differences in exact point sizes are acceptable.
-- **borderline** — Text is readable and the hierarchy is recognizable, but there are noticeable sizing or spacing differences — e.g., headings are somewhat larger or smaller, spacing is noticeably tighter or looser than the source.
-- **fail** — Significant text sizing or spacing issues: headings dramatically over/undersized, spacing inflation that makes the slide much taller, text too small to read, or headings demoted to body text size.
+- **pass** - Heading sizes, body text size, size hierarchy, line spacing, and section spacing all closely match the source. Minor point-size differences are acceptable as long as hierarchy and rhythm are preserved.
+- **borderline** - Text is readable and the hierarchy is still recognizable, but there are noticeable differences — headings are somewhat larger or smaller than in the source, or spacing is noticeably tighter or looser, without being severe enough to break readability or hierarchy.
+- **fail** - One or more significant issues: headings are dramatically over- or undersized, any heading is demoted to body-text size, body text is too small to read, or spacing inflation makes the slide substantially taller/more spread out than the source.
+- **na** - The source slide contains no text (e.g., a pure image or cover slide with no readable text elements).
 
 ## Response format
 
 Respond with a JSON object:
 ```json
-{ "verdict": "pass" | "borderline" | "fail", "reason": "..." }
+{ "verdict": "pass" | "borderline" | "fail" | "na", "reason": "..." }
 ```

@@ -1,0 +1,18 @@
+name: import-diagrams-flattened
+type: model
+kind: categorical
+description: >
+  Detects SmartArt, Venn diagrams, chevrons, timelines, or other structured diagrams that are rebuilt as generic primitives, losing their shape and color in the Gamma output.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

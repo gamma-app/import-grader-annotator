@@ -1,0 +1,18 @@
+name: import-logo-dropped
+type: model
+kind: categorical
+description: >
+  Detects logos present in the source PPTX slide that are missing, turned into text/pills, or rendered at incorrect scale in the Gamma output.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

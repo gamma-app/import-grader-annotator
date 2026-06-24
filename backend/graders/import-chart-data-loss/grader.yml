@@ -1,0 +1,18 @@
+name: import-chart-data-loss
+type: model
+kind: categorical
+description: >
+  Detects charts that are converted to the wrong type, have data changes, or lose legends/axes making numbers unreadable in the Gamma output.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

@@ -1,0 +1,18 @@
+name: import-forced-component-substitution
+type: model
+kind: categorical
+description: >
+  Detects cases where Gamma primitives are imposed where not appropriate — e.g., blockquote bars on quotes, info-icon callouts, gallery on photo mosaics.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

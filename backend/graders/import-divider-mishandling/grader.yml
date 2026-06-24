@@ -1,0 +1,18 @@
+name: import-divider-mishandling
+type: model
+kind: categorical
+description: >
+  Detects dividers or horizontal rules that are dropped, recolored, added where none existed, or resized/moved in the Gamma output.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

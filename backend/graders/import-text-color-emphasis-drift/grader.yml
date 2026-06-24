@@ -1,0 +1,18 @@
+name: import-text-color-emphasis-drift
+type: model
+kind: categorical
+description: >
+  Detects per-slide text color swaps, lost underline/bold, or added italics in the Gamma output compared to the source slide.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

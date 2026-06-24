@@ -1,0 +1,18 @@
+name: import-layout-direction-changed
+type: model
+kind: categorical
+description: >
+  Detects layout direction changes — rows/cols converted to grids, grids to vertical lists, or reading order breaks in the Gamma output.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

@@ -1,0 +1,18 @@
+name: import-table-styling
+type: model
+kind: categorical
+description: >
+  Detects table styling deviations between source and output — header background color, cell colors, line styles, spacing differences.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

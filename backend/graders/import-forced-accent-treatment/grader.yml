@@ -1,0 +1,18 @@
+name: import-forced-accent-treatment
+type: model
+kind: categorical
+description: >
+  Detects images that were inline or full-width in the source slide but are forced into an accent mask, cropped, or zoomed in the Gamma output.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

@@ -1,0 +1,18 @@
+name: import-icons-dropped-swapped
+type: model
+kind: categorical
+description: >
+  Detects icons present in the source slide that are dropped, replaced with wrong glyphs, or shown as gray placeholders in the Gamma output.
+model: claude-sonnet-4-6
+promptFile: prompt.md
+imageVariables:
+  - input_slide
+  - output_slide
+imageConfig:
+  resizeImages: false
+categories:
+  - pass
+  - borderline
+  - fail
+passCategories:
+  - pass

@@ -1,32 +1,31 @@
-# Forced Into Accent Treatment
+# Forced into accent treatment
 
-You are evaluating import fidelity between a source PPTX slide and its Gamma-imported version. Your task is to determine whether any images that were **inline or full-width** in the source are **forced into an accent mask** (cropped into a small decorative shape, zoomed, or placed into an accent container) in the output.
+You are evaluating import fidelity between a source PPTX slide and its Gamma-imported version. Your task is to determine whether content images that had a clear placement role in the source have been forced into a decorative accent treatment in the imported version.
 
 You receive two images:
 
-- `input_slide` — a screenshot of the original PPTX slide
-- `output_slide` — a screenshot of the Gamma-imported version of the same slide
+- `input_slide` - a screenshot of the original PPTX slide
+- `output_slide` - a screenshot of the Gamma-imported version of the same slide
 
 ## Task
 
-1. Identify images in the source slide and note their placement: inline with text, full-width, in their own section, or positioned freely on the slide.
-2. In the output slide, check whether the same images have been forced into an accent treatment — this means the image has been:
-   - Cropped into a circular, rounded-rectangle, or other decorative mask shape when the source had it rectangular/unmasked
-   - Zoomed in significantly and placed as a small accent beside text, when the source had it larger
-   - Moved from an inline/content position to a small decorative accent position
-3. The key question is: did an image that was prominently placed in the source get demoted to a small accent decoration in the output?
+1. Identify every image in `input_slide` and classify its placement role: inline with text, full-width, occupying its own section, or prominently positioned. If the source has no images, or its only image is already a small decorative accent, mark **na**.
+2. For each identified content image, check in `output_slide` whether it retains roughly the same placement role and relative size.
+3. Note any of these failure patterns:
+   - The image is cropped into a decorative mask (circle, rounded shape, or other ornamental cutout) that was not present in the source.
+   - The image is zoomed in and shrunk into a small accent element placed beside text, reducing it from a prominent to a minor role.
+   - The image is moved from a content position (inline, full-width, own section, prominent) to a minor decorative slot at the edge or corner of the layout.
 
 ## Verdicts
 
-- **pass** — All images maintain roughly the same placement style as in the source. Images that were inline stay inline, full-width stay full-width. Minor position adjustments are fine.
-- **borderline** — An image's treatment changed somewhat (e.g., slightly different cropping or a minor mask applied) but it still occupies a similar visual role and size on the slide.
-- **fail** — One or more images are clearly forced into an accent treatment: cropped into a decorative mask, zoomed and shrunk into a small accent area, or moved from a prominent position to a small decorative role.
-
-If the source slide contains no images, verdict is **pass**.
+- **pass** - All content images keep roughly the same placement role and size in the output (inline stays inline, full-width stays full-width, unmasked stays unmasked). Minor positional or size adjustments are acceptable.
+- **borderline** - The treatment has shifted for one or more images (a mild mask applied, a modest crop, or the image is somewhat smaller) but the image still occupies a similar visual role and comparable size overall.
+- **fail** - One or more content images are clearly forced into accent treatment: cropped into a decorative mask, zoomed and shrunk into a small accent, or moved from a prominent content position to a minor decorative role.
+- **na** - The source slide has no images, or its only image is already a small decorative accent in the source (there is no content image to demote).
 
 ## Response format
 
 Respond with a JSON object:
 ```json
-{ "verdict": "pass" | "borderline" | "fail", "reason": "..." }
+{ "verdict": "pass" | "borderline" | "fail" | "na", "reason": "..." }
 ```

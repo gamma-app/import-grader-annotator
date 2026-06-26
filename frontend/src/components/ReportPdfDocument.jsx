@@ -279,7 +279,7 @@ export default function ReportPdf({ report, maxPairs = 10 }) {
         {shown.length === 0 ? (
           <Text style={styles.caption}>Human and agent agree on all {n} compared pairs.</Text>
         ) : (
-          shown.map((d) => <DisagreementCard key={`${d.slug}:${d.pair_index}`} d={d} variantLabel={report.variant_label} />)
+          shown.map((d) => <DisagreementCard key={`${d.slug}:${d.variant}:${d.pair_index}`} d={d} variantLabel={report.variant_label} />)
         )}
         <Text style={styles.pageNum} fixed render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
       </Page>

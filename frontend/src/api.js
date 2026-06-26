@@ -81,10 +81,10 @@ export const api = {
     }),
 
   // Bulk background runs (deck-wide or all decks for a variant).
-  runAiBulk: ({ scope, variant, slug = null, force = false }) =>
+  runAiBulk: ({ scope, variant, slug = null, force = false, modes = null }) =>
     req('/api/ai-grades/run', {
       method: 'POST',
-      body: JSON.stringify({ scope, variant, slug, force }),
+      body: JSON.stringify({ scope, variant, slug, force, modes }),
     }),
   getAiJobs: () => req('/api/ai-grades/jobs'),
   getAiJob: (jobId) => req(`/api/ai-grades/jobs/${encodeURIComponent(jobId)}`),

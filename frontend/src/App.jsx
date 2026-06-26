@@ -74,20 +74,24 @@ export default function App() {
           Import Slide-Pair Grader
         </button>
 
-        <div className="ml-1 flex items-center bg-slate-800/80 border border-slate-700 rounded-lg p-0.5 text-sm">
-          {modes.variants.map((v) => (
-            <button
-              key={v.key}
-              onClick={() => setVariant(v.key)}
-              title={v.pdf}
-              className={`px-3 py-1 rounded-md transition ${
-                variant === v.key ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'
-              }`}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
+        {/* The Reports page has its own variant selector (incl. "Both"), so hide
+            this global switcher there to avoid two competing controls. */}
+        {view.name !== 'report' && (
+          <div className="ml-1 flex items-center bg-slate-800/80 border border-slate-700 rounded-lg p-0.5 text-sm">
+            {modes.variants.map((v) => (
+              <button
+                key={v.key}
+                onClick={() => setVariant(v.key)}
+                title={v.pdf}
+                className={`px-3 py-1 rounded-md transition ${
+                  variant === v.key ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="flex-1" />
         <button

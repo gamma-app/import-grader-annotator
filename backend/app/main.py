@@ -81,6 +81,7 @@ class AIBulkRunRequest(BaseModel):
     variant: str
     slug: Optional[str] = None  # required when scope == "deck"
     force: bool = False
+    modes: Optional[List[int]] = None  # subset of pair-level mode ids; None = all
 
 
 def _cells_to_dict(modes: Dict[str, Cell]) -> Dict[str, Dict]:
@@ -308,18 +309,24 @@ def ai_status() -> Dict:
 # 2-segment "/jobs/{job_id}" path isn't captured as slug="jobs".
 @app.post("/api/ai-grades/run")
 def run_ai_bulk(body: AIBulkRunRequest) -> Dict:
-    _require_variant(body.variant)
+    # "both" pools all real variants into one run (see reports.COMBINED_VARIANT);
+    # the per-variant guards below only apply to a single real variant.
+    is_both = body.variant == reports.COMBINED_VARIANT
+    if not is_both:
+        _require_variant(body.variant)
     if body.scope == "deck":
         if not body.slug:
             raise HTTPException(status_code=400, detail="scope 'deck' requires a slug")
         _require_deck(body.slug)
-        if not storage.is_variant_gradeable(body.slug, body.variant):
+        if not is_both and not storage.is_variant_gradeable(body.slug, body.variant):
             raise HTTPException(
                 status_code=409,
                 detail=f"deck '{body.slug}' variant '{body.variant}' is misaligned — align it before grading",
             )
     try:
-        return ai_grader.start_run(body.scope, body.variant, slug=body.slug, force=body.force)
+        return ai_grader.start_run(
+            body.scope, body.variant, slug=body.slug, force=body.force, modes=body.modes
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ai_grader.AIGraderError as exc:
@@ -451,8 +458,13 @@ def recalibration_reject(run_id: str) -> Dict:
 
 @app.get("/api/reports/mode/{mode_id}")
 def get_mode_report(mode_id: int, variant: str) -> Dict:
-    """Human-vs-AI agreement report for one pair-level mode + variant."""
-    _require_variant(variant)
+    """Human-vs-AI agreement report for one pair-level mode + variant.
+
+    `variant` is a single variant key, or "both" to pool all variants into one
+    combined report.
+    """
+    if variant != reports.COMBINED_VARIANT:
+        _require_variant(variant)
     if mode_id not in MODE_GRADERS:
         raise HTTPException(status_code=404, detail=f"mode #{mode_id} has no AI grader")
     return reports.mode_report(mode_id, variant)

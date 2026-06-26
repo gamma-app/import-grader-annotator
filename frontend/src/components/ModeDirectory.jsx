@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, BookOpen, Loader2, Search, Copy, Check, AlertTriangle, Sparkles, RefreshCw, GitBranch, UploadCloud, Wand2, ClipboardCheck, X } from 'lucide-react'
+import { ArrowLeft, BookOpen, Loader2, Search, Copy, Check, AlertTriangle, Sparkles, RefreshCw, GitBranch, UploadCloud, Wand2, PlayCircle, ClipboardCheck, X } from 'lucide-react'
 import { api } from '../api'
 import RecalibratePanel from './RecalibratePanel.jsx'
 
@@ -120,6 +120,8 @@ export default function ModeDirectory({ onBack, showToast }) {
   const [recalRun, setRecalRun] = useState(null) // full run record for the review panel
   const [recalBusy, setRecalBusy] = useState(false) // starting / adopting / rejecting
   const recalPoll = useRef(null)
+  const [aiJob, setAiJob] = useState(null) // active/last bulk AI grading job (global, single-slot)
+  const aiPoll = useRef(null)
   const selectedIdRef = useRef(selectedId)
 
   useEffect(() => {
@@ -333,6 +335,52 @@ export default function ModeDirectory({ onBack, showToast }) {
   // Stop polling on unmount.
   useEffect(() => () => stopRecalPoll(), [stopRecalPoll])
 
+  // ----- bulk AI grading (run one grader across all decks)
+  const stopAiPoll = useCallback(() => {
+    if (aiPoll.current) {
+      clearInterval(aiPoll.current)
+      aiPoll.current = null
+    }
+  }, [])
+
+  const startAiPoll = useCallback(
+    (jobId) => {
+      stopAiPoll()
+      aiPoll.current = setInterval(async () => {
+        let j
+        try {
+          j = await api.getAiJob(jobId)
+        } catch {
+          stopAiPoll()
+          return
+        }
+        setAiJob(j)
+        if (j.status === 'running' || j.status === 'cancelling') return
+        stopAiPoll()
+        showToast?.({
+          type: j.status === 'error' ? 'error' : 'success',
+          msg: `AI run ${j.status} \u2014 ${j.cells} graded${j.errors ? `, ${j.errors} errors` : ''}`,
+        })
+      }, 1500)
+    },
+    [stopAiPoll, showToast],
+  )
+
+  // Resume an in-flight bulk run (e.g. started from the dashboard) on mount.
+  useEffect(() => {
+    api
+      .getAiJobs()
+      .then((r) => {
+        const j = r.active
+        if (j && (j.status === 'running' || j.status === 'cancelling')) {
+          setAiJob(j)
+          startAiPoll(j.id)
+        }
+      })
+      .catch(() => {})
+    return () => stopAiPoll()
+  }, [startAiPoll, stopAiPoll])
+
   const openRecalConfirm = async (mode) => {
     await flushNow()
     setRecalConfirm({ open: true, mode, preview: null, loading: true })
@@ -432,6 +480,33 @@ export default function ModeDirectory({ onBack, showToast }) {
     }
   }
 
+  const gradeAllDecks = async (mode) => {
+    if (!mode?.grader_name) return
+    const ok = window.confirm(
+      `Run the "${mode.name}" grader (#${mode.id}) on all decks across both splits ` +
+        `(Deck Doctor + Current Import).\n\n` +
+        `Grades every available, aligned deck for this one failure mode ` +
+        `(already-graded slides are skipped). Runs in the background — you can keep working. Continue?`,
+    )
+    if (!ok) return
+    try {
+      const j = await api.runAiBulk({ scope: 'all', variant: 'both', modes: [mode.id] })
+      setAiJob(j)
+      if (j.status === 'running' || j.status === 'cancelling') startAiPoll(j.id)
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    }
+  }
+
+  const cancelAiRun = async () => {
+    if (!aiJob) return
+    try {
+      setAiJob(await api.cancelAiJob(aiJob.id))
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    }
+  }
+
   const textFor = (m) => (drafts[m.id] !== undefined ? drafts[m.id] : m.description || '')
 
   const filtered = useMemo(() => {
@@ -455,6 +530,7 @@ export default function ModeDirectory({ onBack, showToast }) {
 
   const selected = data?.find((m) => m.id === selectedId) || null
   const recalActive = !!(recalJob && (recalJob.status === 'running' || recalJob.status === 'cancelling'))
+  const aiJobActive = !!(aiJob && (aiJob.status === 'running' || aiJob.status === 'cancelling'))
   const recalForSelected = recalActive && recalJob.mode_id === selectedId
   const proposal = recalState?.latest_run?.status === 'proposed' ? recalState.latest_run : null
 
@@ -603,6 +679,19 @@ export default function ModeDirectory({ onBack, showToast }) {
                         </button>
                       )}
                       <button
+                        onClick={() => gradeAllDecks(selected)}
+                        disabled={aiJobActive || recalForSelected || reinitBusy || commitBusy}
+                        title={
+                          aiJobActive
+                            ? 'A bulk AI run is already in progress'
+                            : 'Run this grader on every deck across both splits (Deck Doctor + Current Import)'
+                        }
+                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-sky-600/60 text-sky-200 hover:bg-sky-600/15 disabled:opacity-40"
+                      >
+                        {aiJobActive ? <Loader2 size={13} className="animate-spin" /> : <PlayCircle size={13} />}
+                        Grade all decks
+                      </button>
+                      <button
                         onClick={() => openRecalConfirm(selected)}
                         disabled={recalActive || reinitBusy || commitBusy || recalBusy}
                         title={
@@ -663,6 +752,33 @@ export default function ModeDirectory({ onBack, showToast }) {
                     </div>
                     <div className="text-[11px] text-slate-400 mt-1">
                       {recalJob.done}/{recalJob.total} model calls · {recalJob.message || recalJob.stage}
+                    </div>
+                  </div>
+                )}
+                {aiJobActive && (
+                  <div className="mb-2 rounded-lg border border-sky-700/50 bg-sky-950/20 p-2.5">
+                    <div className="flex items-center justify-between gap-3 mb-1.5">
+                      <div className="flex items-center gap-2 text-xs text-slate-200 min-w-0">
+                        <Loader2 size={13} className="animate-spin text-sky-300 shrink-0" />
+                        <span className="font-medium shrink-0">Grading all decks</span>
+                        <span className="text-slate-400 truncate">· {aiJob.current || 'starting…'}</span>
+                      </div>
+                      <button
+                        onClick={cancelAiRun}
+                        disabled={aiJob.status === 'cancelling'}
+                        className="shrink-0 text-[11px] px-2 py-0.5 rounded border border-slate-600 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        {aiJob.status === 'cancelling' ? 'Cancelling…' : 'Cancel'}
+                      </button>
+                    </div>
+                    <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-sky-500 transition-all"
+                        style={{ width: `${aiJob.total > 0 ? Math.round((aiJob.done / aiJob.total) * 100) : 0}%` }}
+                      />
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-1">
+                      {aiJob.done}/{aiJob.total} pairs · {aiJob.cells} graded{aiJob.errors ? ` · ${aiJob.errors} errors` : ''}
                     </div>
                   </div>
                 )}

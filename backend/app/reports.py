@@ -34,14 +34,28 @@ def _cohen_kappa(human_dist: Dict[str, int], ai_dist: Dict[str, int],
     return round((po - pe) / (1.0 - pe), 3)
 
 
+# Pseudo-variant: pool every real variant into one combined dataset.
+COMBINED_VARIANT = "both"
+COMBINED_LABEL = "Both variants"
+
+
 def mode_report(mode_id: int, variant: str) -> Dict:
     """Build the agreement report for one pair-level mode + variant.
 
     Assumes `mode_id` has a VLM grader and `variant` is valid (validated by the
-    caller). Pairs are matched by index within each (deck, variant).
+    caller). Pairs are matched by index within each (deck, variant). When
+    `variant` is ``"both"``, every pair from all real variants is pooled into a
+    single dataset (one confusion matrix, distributions, agreement, and κ).
     """
     mode = MODE_BY_ID[mode_id]
     mkey = str(mode_id)
+
+    if variant == COMBINED_VARIANT:
+        variants = list(config.VARIANT_KEYS)
+        variant_label = COMBINED_LABEL
+    else:
+        variants = [variant]
+        variant_label = config.VARIANT_BY_KEY[variant]["label"]
 
     human_dist = _empty_dist()
     ai_dist = _empty_dist()
@@ -50,52 +64,54 @@ def mode_report(mode_id: int, variant: str) -> Dict:
     both = human_only = ai_only = no_data = considered = 0
     disagreements: List[Dict] = []
 
-    for slug in storage.list_slugs():
-        hv = storage.annotation_variant(slug, variant)
-        if not hv or not hv.get("available"):
-            continue  # no human data for this variant -> no "both" possible
-        ai_pairs = ai_grader.load_ai_grades(slug, variant).get("pairs", {})
-        title = storage.prettify(slug)
+    for vkey in variants:
+        for slug in storage.list_slugs():
+            hv = storage.annotation_variant(slug, vkey)
+            if not hv or not hv.get("available"):
+                continue  # no human data for this variant -> no "both" possible
+            ai_pairs = ai_grader.load_ai_grades(slug, vkey).get("pairs", {})
+            title = storage.prettify(slug)
 
-        for p in hv.get("pairs", []):
-            idx = p.get("index")
-            considered += 1
-            h_cell = (p.get("modes") or {}).get(mkey) or {}
-            h_grade = h_cell.get("grade", "ungraded")
-            ai_cell = (ai_pairs.get(str(idx)) or {}).get(mkey) or {}
-            ai_verdict = ai_cell.get("verdict")
+            for p in hv.get("pairs", []):
+                idx = p.get("index")
+                considered += 1
+                h_cell = (p.get("modes") or {}).get(mkey) or {}
+                h_grade = h_cell.get("grade", "ungraded")
+                ai_cell = (ai_pairs.get(str(idx)) or {}).get(mkey) or {}
+                ai_verdict = ai_cell.get("verdict")
 
-            h_ok = h_grade in _GRADES
-            ai_ok = ai_verdict in _GRADES
-            if h_ok and ai_ok:
-                both += 1
-                human_dist[h_grade] += 1
-                ai_dist[ai_verdict] += 1
-                confusion[h_grade][ai_verdict] += 1
-                if h_grade == ai_verdict:
-                    agreements += 1
+                h_ok = h_grade in _GRADES
+                ai_ok = ai_verdict in _GRADES
+                if h_ok and ai_ok:
+                    both += 1
+                    human_dist[h_grade] += 1
+                    ai_dist[ai_verdict] += 1
+                    confusion[h_grade][ai_verdict] += 1
+                    if h_grade == ai_verdict:
+                        agreements += 1
+                    else:
+                        disagreements.append({
+                            "slug": slug,
+                            "title": title,
+                            "variant": vkey,
+                            "pair_index": idx,
+                            "input_image": p.get("input_image"),
+                            "output_image": p.get("output_image"),
+                            "human_grade": h_grade,
+                            "human_note": h_cell.get("note", ""),
+                            "ai_verdict": ai_verdict,
+                            "ai_reason": ai_cell.get("reason", ""),
+                            "ai_graded_at": ai_cell.get("graded_at"),
+                        })
+                elif h_ok:
+                    human_only += 1
+                elif ai_ok:
+                    ai_only += 1
                 else:
-                    disagreements.append({
-                        "slug": slug,
-                        "title": title,
-                        "pair_index": idx,
-                        "input_image": p.get("input_image"),
-                        "output_image": p.get("output_image"),
-                        "human_grade": h_grade,
-                        "human_note": h_cell.get("note", ""),
-                        "ai_verdict": ai_verdict,
-                        "ai_reason": ai_cell.get("reason", ""),
-                        "ai_graded_at": ai_cell.get("graded_at"),
-                    })
-            elif h_ok:
-                human_only += 1
-            elif ai_ok:
-                ai_only += 1
-            else:
-                no_data += 1
+                    no_data += 1
 
     n = both
-    disagreements.sort(key=lambda d: (d["slug"], d["pair_index"] or 0))
+    disagreements.sort(key=lambda d: (d["slug"], d["pair_index"] or 0, d["variant"]))
     return {
         "mode": {
             "id": mode_id,
@@ -105,7 +121,7 @@ def mode_report(mode_id: int, variant: str) -> Dict:
             "grader": MODE_GRADERS.get(mode_id),
         },
         "variant": variant,
-        "variant_label": config.VARIANT_BY_KEY[variant]["label"],
+        "variant_label": variant_label,
         "grades": list(_GRADES),
         "counts": {
             "both": n,

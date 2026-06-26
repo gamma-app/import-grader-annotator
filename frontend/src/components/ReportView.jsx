@@ -113,7 +113,7 @@ function Lightbox({ items, index, variantLabel, onClose, onPrev, onNext }) {
         </div>
         {/* images */}
         <div className="flex-1 min-h-0">
-          <ImageViewer key={`${d.slug}:${d.pair_index}`} inputSrc={d.input_image} outputSrc={d.output_image} outputLabel={`OUTPUT · ${variantLabel}`} />
+          <ImageViewer key={`${d.slug}:${d.variant}:${d.pair_index}`} inputSrc={d.input_image} outputSrc={d.output_image} outputLabel={`OUTPUT · ${variantLabel}`} />
         </div>
         {/* scores + notes */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-slate-800 border-t border-slate-800 max-h-[34%] overflow-auto thin-scroll">
@@ -156,6 +156,13 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
     localStorage.setItem('report:modeId', String(modeId))
   }, [modeId])
 
+  // Which variant(s) the report covers. Defaults to (and follows) the global
+  // header variant, plus a pooled 'both' option chosen via the selector below.
+  const [reportVariant, setReportVariant] = useState(variant)
+  useEffect(() => {
+    setReportVariant(variant)
+  }, [variant])
+
   useEffect(() => {
     if (!modeId) return
     let alive = true
@@ -163,14 +170,14 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
     setReport(null)
     setLb(null)
     api
-      .getModeReport(modeId, variant)
+      .getModeReport(modeId, reportVariant)
       .then((r) => alive && setReport(r))
       .catch((e) => alive && showToast({ type: 'error', msg: String(e) }))
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
-  }, [modeId, variant, showToast])
+  }, [modeId, reportVariant, showToast])
 
   const dis = report?.disagreements || []
   const closeLb = useCallback(() => setLb(null), [])
@@ -208,7 +215,7 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `agreement-report_mode-${report.mode.id}_${variant}.pdf`
+      a.download = `agreement-report_mode-${report.mode.id}_${report.variant}.pdf`
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -230,7 +237,7 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
     } finally {
       setExporting(false)
     }
-  }, [canExport, exporting, report, variant, showToast])
+  }, [canExport, exporting, report, showToast])
 
   return (
     <div className="h-full flex flex-col">
@@ -251,9 +258,17 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
             <option key={m.id} value={m.id}>#{m.id} {m.name}</option>
           ))}
         </select>
-        <span className="shrink-0 text-xs px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-200 border border-violet-500/30">
-          {report?.variant_label || variant}
-        </span>
+        <select
+          value={reportVariant}
+          onChange={(e) => setReportVariant(e.target.value)}
+          title="Which variant(s) to report on"
+          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+        >
+          {modes.variants.map((v) => (
+            <option key={v.key} value={v.key}>{v.label}</option>
+          ))}
+          <option value="both">Both variants</option>
+        </select>
         <div className="flex-1" />
         {loading && <Loader2 size={16} className="animate-spin text-slate-400" />}
         <button
@@ -348,7 +363,7 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                   {dis.map((d, i) => (
                     <button
-                      key={`${d.slug}:${d.pair_index}`}
+                      key={`${d.slug}:${d.variant}:${d.pair_index}`}
                       onClick={() => setLb(i)}
                       className="group text-left bg-slate-900 border border-slate-800 rounded-lg overflow-hidden hover:border-indigo-600 transition"
                     >
@@ -378,7 +393,7 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
       </div>
 
       {lb != null && (
-        <Lightbox items={dis} index={lb} variantLabel={report?.variant_label || variant} onClose={closeLb} onPrev={prevLb} onNext={nextLb} />
+        <Lightbox items={dis} index={lb} variantLabel={report?.variant_label || reportVariant} onClose={closeLb} onPrev={prevLb} onNext={nextLb} />
       )}
     </div>
   )

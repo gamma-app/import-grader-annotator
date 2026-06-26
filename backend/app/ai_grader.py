@@ -550,8 +550,10 @@ def cancel_job(job_id: str) -> Optional[Dict]:
         return _public_job(job)
 
 
-def _enumerate_units(scope: str, variant: str, slug: Optional[str]) -> List[Tuple[str, int]]:
-    """[(slug, pair_index), ...] for the run scope, from lightweight summaries."""
+def _enumerate_units(
+    scope: str, variants: List[str], slug: Optional[str]
+) -> List[Tuple[str, str, int]]:
+    """[(slug, variant, pair_index), ...] for the run scope, across the given variants."""
     if scope == "deck":
         if not slug:
             raise ValueError("scope 'deck' requires a slug")
@@ -561,27 +563,51 @@ def _enumerate_units(scope: str, variant: str, slug: Optional[str]) -> List[Tupl
     else:
         raise ValueError(f"unknown scope '{scope}'")
 
-    units: List[Tuple[str, int]] = []
+    units: List[Tuple[str, str, int]] = []
     for s in slugs:
-        summ = storage.deck_summary(s)["variants"].get(variant, {})
-        if not summ.get("available") or summ.get("misaligned"):
-            continue  # skip misaligned variants — they're locked until aligned
-        for idx in range(1, int(summ.get("pair_count", 0)) + 1):
-            units.append((s, idx))
+        vinfo = storage.deck_summary(s)["variants"]
+        for variant in variants:
+            summ = vinfo.get(variant, {})
+            if not summ.get("available") or summ.get("misaligned"):
+                continue  # skip misaligned/unavailable variants — locked until aligned
+            for idx in range(1, int(summ.get("pair_count", 0)) + 1):
+                units.append((s, variant, idx))
     return units
 
 
-def start_run(scope: str, variant: str, *, slug: Optional[str] = None, force: bool = False) -> Dict:
-    """Start a background bulk run. If one is already active, returns it unchanged."""
-    if variant not in config.VARIANT_BY_KEY:
+def start_run(
+    scope: str,
+    variant: str,
+    *,
+    slug: Optional[str] = None,
+    force: bool = False,
+    modes: Optional[List[int]] = None,
+) -> Dict:
+    """Start a background bulk run. If one is already active, returns it unchanged.
+
+    `modes` restricts grading to a subset of pair-level failure modes (e.g. a
+    single-mode run); None grades every mapped mode per pair (the whole suite).
+    """
+    # "both" is a pseudo-variant (see reports.COMBINED_VARIANT) that pools all real
+    # variants; for grading it means run every real split (Deck Doctor + Current
+    # Import) inside one job.
+    if variant == "both":
+        variants = list(config.VARIANT_KEYS)
+    elif variant in config.VARIANT_BY_KEY:
+        variants = [variant]
+    else:
         raise ValueError(f"unknown variant '{variant}'")
+    if modes is not None:
+        modes = gradeable_pair_modes(modes)
+        if not modes:
+            raise ValueError("none of the requested modes have a per-pair VLM grader")
     st = status()
     if not st["llm_configured"]:
         raise AIGraderError("ANTHROPIC_API_KEY is not set in .env (copy it from gamma's .envrc)")
     if not st["graders_dir_ok"]:
         raise AIGraderError("graders dir not found — expected vendored backend/graders/")
 
-    units = _enumerate_units(scope, variant, slug)
+    units = _enumerate_units(scope, variants, slug)
 
     global _active_job_id
     with _jobs_lock:
@@ -605,6 +631,7 @@ def start_run(scope: str, variant: str, *, slug: Optional[str] = None, force: bo
             "finished_at": None,
             "error": None,
             "force": bool(force),
+            "modes": modes,
             "_cancel": threading.Event(),
             "_units": units,
         }
@@ -620,18 +647,18 @@ def _run_job(job_id: str) -> None:
     job = _jobs[job_id]
     units = job["_units"]
     cancel = job["_cancel"]
-    variant = job["variant"]
     force = job["force"]
+    modes = job.get("modes")
     consecutive = 0
     try:
-        for slug, idx in units:
+        for slug, variant, idx in units:
             if cancel.is_set():
                 break
             with _jobs_lock:
-                job["current"] = f"{slug} \u00b7 pair {idx}"
+                job["current"] = f"{slug} \u00b7 {variant} \u00b7 pair {idx}"
                 job["current_slug"] = slug
             try:
-                res = grade_pair(slug, variant, idx, force=force)
+                res = grade_pair(slug, variant, idx, modes=modes, force=force)
                 cells = res.get("modes", {})
                 errs = sum(1 for c in cells.values() if c.get("verdict") == "error")
                 with _jobs_lock:

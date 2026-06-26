@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   X, Check, AlertTriangle, Loader2, TrendingUp, TrendingDown, Minus,
-  ChevronDown, ChevronRight, Trophy,
+  ChevronDown, ChevronRight, Trophy, Download,
 } from 'lucide-react'
 
 const GRADES = ['pass', 'borderline', 'fail', 'na']
@@ -44,6 +44,105 @@ function diffLines(aText, bText) {
   while (i < n) out.push({ t: 'del', v: a[i++] })
   while (j < m) out.push({ t: 'add', v: b[j++] })
   return out
+}
+
+// ----- Markdown report export (client-side; mirrors the panel's sections)
+function mdDelta(before, after, pct = false) {
+  if (before === null || before === undefined || after === null || after === undefined) return '\u2014'
+  const d = after - before
+  return `${d > 0 ? '+' : ''}${pct ? d.toFixed(1) : d.toFixed(3)}`
+}
+
+// Fence `content` with enough backticks that inner ``` runs can't close it early.
+function fence(content, lang = '') {
+  const longest = (String(content).match(/`+/g) || []).reduce((m, s) => Math.max(m, s.length), 0)
+  const ticks = '`'.repeat(Math.max(3, longest + 1))
+  return `${ticks}${lang}\n${content}\n${ticks}`
+}
+
+function scoreRowMd(label, base, win) {
+  const b = base || {}
+  const w = win || {}
+  return `| ${label} | ${b.n ?? '\u2014'} | ${fmtK(b.cohen_kappa)} | ${fmtK(w.cohen_kappa)} | ${mdDelta(b.cohen_kappa, w.cohen_kappa)} | ${fmtP(b.agreement_pct)} | ${fmtP(w.agreement_pct)} | ${mdDelta(b.agreement_pct, w.agreement_pct, true)} |`
+}
+
+function confusionMd(score) {
+  const conf = (score && score.confusion) || {}
+  const rows = GRADES.map((h) => `| ${h} | ${GRADES.map((a) => conf[h]?.[a] || 0).join(' | ')} |`)
+  return [`| h \\ ai | ${GRADES.join(' | ')} |`, `|---|${GRADES.map(() => '--:').join('|')}|`, ...rows].join('\n')
+}
+
+function flipsMd(items) {
+  if (!items || !items.length) return '_none_'
+  return items
+    .map((f) => {
+      const note = (f.human_note || '').trim().replace(/\s+/g, ' ')
+      return `- ${f.title} \u00b7 ${f.variant} \u00b7 pair ${f.pair_index}: human **${f.human_grade}**, ${f.before} \u2192 ${f.after}${note ? ` \u2014 _${note}_` : ''}`
+    })
+    .join('\n')
+}
+
+function buildReportMarkdown(run) {
+  const base = run.baseline || {}
+  const win = (run.winner && run.winner.scores) || {}
+  const flips = (run.winner && run.winner.test_flips) || { fixed: [], broke: [] }
+  const ss = run.split_sizes || {}
+  const L = []
+  L.push(`# Recalibration report \u2014 #${run.mode_id} ${run.mode_name}`, '')
+  L.push(`- **Run id:** \`${run.id}\``)
+  L.push(`- **Status:** ${run.status}`)
+  L.push(`- **Created:** ${run.created_at}`)
+  if (run.adopted_at) L.push(`- **Adopted:** ${run.adopted_at}`)
+  if (run.rejected_at) L.push(`- **Rejected:** ${run.rejected_at}`)
+  L.push(`- **Grader:** ${run.grader} (${run.model})`)
+  L.push(`- **Optimizer model:** ${run.optimizer_model}`)
+  L.push(`- **Dataset:** ${run.dataset_size} labeled pairs \u00b7 split ${ss.train}/${ss.val}/${ss.test} (train/val/test) \u00b7 seed ${run.seed}`, '')
+
+  L.push('## Agreement: current \u2192 proposed', '')
+  L.push('| Split | n | \u03ba now | \u03ba new | \u0394\u03ba | % now | % new | \u0394% |')
+  L.push('|---|--:|--:|--:|--:|--:|--:|--:|')
+  if (base.train) L.push(scoreRowMd('train', base.train, win.train))
+  if (base.val) L.push(scoreRowMd('validation', base.val, win.val))
+  if (base.test) L.push(scoreRowMd('test (held out)', base.test, win.test))
+  L.push('', '_The test split was never seen during optimization or selection \u2014 it is the honest before/after._', '')
+
+  if (base.test || win.test) {
+    L.push('## Confusion matrices (test)', '')
+    if (base.test) L.push(`**Current** \u2014 \u03ba ${fmtK(base.test.cohen_kappa)} \u00b7 ${fmtP(base.test.agreement_pct)} \u00b7 n=${base.test.n}`, '', confusionMd(base.test), '')
+    if (win.test) L.push(`**Proposed** \u2014 \u03ba ${fmtK(win.test.cohen_kappa)} \u00b7 ${fmtP(win.test.agreement_pct)} \u00b7 n=${win.test.n}`, '', confusionMd(win.test), '')
+  }
+
+  L.push('## Test changes', '')
+  L.push(`**Fixed (wrong \u2192 right): ${flips.fixed?.length || 0}**`, '', flipsMd(flips.fixed), '')
+  L.push(`**Broke (right \u2192 wrong): ${flips.broke?.length || 0}**`, '', flipsMd(flips.broke), '')
+
+  L.push('## Candidates (selected on validation \u03ba)', '')
+  for (const c of run.candidates || []) {
+    const isWinner = c.id === run.winner_id
+    const s = c.val_score || {}
+    if (!c.has_prompt) {
+      L.push(`- **${c.id}**${isWinner ? ' (winner)' : ''} \u2014 failed: ${c.error || 'no prompt'}`)
+    } else {
+      L.push(`- **${c.id}**${isWinner ? ' (winner)' : ''} \u2014 val \u03ba ${fmtK(s.cohen_kappa)} \u00b7 ${fmtP(s.agreement_pct)}${s.errors > 0 ? ` \u00b7 ${s.errors} err` : ''} \u00b7 temp ${c.temperature}`)
+    }
+    if (c.summary) L.push(`  - ${c.summary.trim().replace(/\s+/g, ' ')}`)
+  }
+  L.push('')
+
+  if (run.winner && run.winner.themes) {
+    L.push('## Root-cause analysis (winner)', '')
+    L.push(run.winner.themes.trim().split('\n').map((l) => `> ${l}`).join('\n'), '')
+  }
+
+  if (run.winner && run.winner.prompt) {
+    const diffText = diffLines(run.current_prompt, run.winner.prompt)
+      .map((d) => `${d.t === 'add' ? '+ ' : d.t === 'del' ? '- ' : '  '}${d.v}`)
+      .join('\n')
+    L.push('## Prompt changes (current \u2192 proposed)', '', fence(diffText, 'diff'), '')
+    L.push('<details><summary>Full proposed prompt</summary>', '', fence(run.winner.prompt), '', '</details>', '')
+  }
+
+  return L.join('\n')
 }
 
 function Delta({ before, after, pct = false }) {
@@ -190,6 +289,18 @@ export default function RecalibratePanel({ run, onClose, onAdopt, onReject, busy
       ? win.test.cohen_kappa - base.test.cohen_kappa
       : null
 
+  const handleDownload = () => {
+    const blob = new Blob([buildReportMarkdown(run)], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `recalibration_mode-${run.mode_id}_${run.id}.md`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => !busy && onClose()}>
       <div
@@ -209,6 +320,13 @@ export default function RecalibratePanel({ run, onClose, onAdopt, onReject, busy
             </p>
           </div>
           <div className="flex-1" />
+          <button
+            onClick={handleDownload}
+            title="Download this report as Markdown"
+            className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            <Download size={13} /> Download report
+          </button>
           {decided && (
             <span className={`text-xs px-2 py-0.5 rounded border ${run.status === 'approved' ? 'border-emerald-600/50 text-emerald-300' : 'border-slate-600 text-slate-400'}`}>
               {run.status}

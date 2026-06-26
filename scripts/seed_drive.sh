@@ -43,6 +43,7 @@ echo "==> Copying deck PDFs  ->  $DEST/decks  (existing files preserved)"
 rsync -avm "${DRY[@]}" --ignore-existing \
   --include='*/' \
   --include='input.pdf' --include='ideal_output.pdf' --include='current_output.pdf' \
+  --include='*_output.original.pdf' \
   --exclude='*' \
   "$SRC/decks/" "$DEST/decks/"
 

@@ -231,6 +231,29 @@ def get_ai_grades(slug: str, variant: str) -> Dict:
     return load_ai_grades(slug, variant)
 
 
+def store_ai_verdicts(mode_id: int, entries: List[Tuple[str, str, int, Dict]]) -> int:
+    """Bulk-write verdict cells for one mode. ``entries`` is an iterable of
+    ``(slug, variant, pair_index, cell)``; each cell is stored verbatim under
+    ``pairs[index][mode_id]``. Used by recalibration to persist a winning prompt's
+    already-computed verdicts so the agreement report is instantly current.
+    Returns the number of cells written."""
+    mid = str(mode_id)
+    grouped: Dict[Tuple[str, str], List[Tuple[int, Dict]]] = {}
+    for slug, variant, index, cell in entries:
+        grouped.setdefault((slug, variant), []).append((index, cell))
+
+    written = 0
+    for (slug, variant), items in grouped.items():
+        with _store_lock(f"{slug}__{variant}"):
+            store = load_ai_grades(slug, variant)
+            for index, cell in items:
+                store["pairs"].setdefault(str(index), {})[mid] = cell
+                written += 1
+            store["updated_at"] = _now()
+            _save_ai_grades(slug, variant, store)
+    return written
+
+
 # --------------------------------------------------------------- grading
 def _image_path(rel_url: str) -> Path:
     """Map a pair image URL ('/images/<slug>/<side>/<name>') to its file on disk.
@@ -341,6 +364,8 @@ def grade_pair(
 
     Resolves the two image URLs once, then fans out one model call per mode.
     """
+    if not storage.is_variant_gradeable(slug, variant):
+        raise AIGraderError(f"variant '{variant}' of {slug} is misaligned — align it before grading")
     detail = storage.get_deck_detail(slug, variant)
     pair = _find_pair(detail, index)
     if pair is None:
@@ -454,6 +479,36 @@ def clear_ai_grades_for_mode(mode_id: int) -> int:
     return removed
 
 
+def clear_stale_ai_grades_for_mode(mode_id: int, keep_prompt_hash: str) -> int:
+    """Remove a mode's AI verdicts whose prompt_hash differs from `keep_prompt_hash`,
+    across every (deck, variant) store.
+
+    Used after adopting a recalibrated prompt: the freshly persisted dataset
+    verdicts carry the new prompt_hash and are kept, while every other cell (graded
+    under the old prompt) is dropped so the UI/report never shows stale verdicts.
+    Returns the number of cells removed."""
+    mid = str(mode_id)
+    removed = 0
+    for path in _iter_store_files():
+        stem = path.stem
+        if "__" not in stem:
+            continue
+        slug, _, variant = stem.rpartition("__")
+        with _store_lock(f"{slug}__{variant}"):
+            store = load_ai_grades(slug, variant)
+            changed = False
+            for cells in store.get("pairs", {}).values():
+                cell = cells.get(mid)
+                if cell is not None and cell.get("prompt_hash") != keep_prompt_hash:
+                    del cells[mid]
+                    removed += 1
+                    changed = True
+            if changed:
+                store["updated_at"] = _now()
+                _save_ai_grades(slug, variant, store)
+    return removed
+
+
 # --------------------------------------------------------------- bulk jobs
 # In-memory only: a single background run at a time, polled by the dashboard.
 # Each pair is graded by grade_pair (which fans out its modes at
@@ -509,8 +564,8 @@ def _enumerate_units(scope: str, variant: str, slug: Optional[str]) -> List[Tupl
     units: List[Tuple[str, int]] = []
     for s in slugs:
         summ = storage.deck_summary(s)["variants"].get(variant, {})
-        if not summ.get("available"):
-            continue
+        if not summ.get("available") or summ.get("misaligned"):
+            continue  # skip misaligned variants — they're locked until aligned
         for idx in range(1, int(summ.get("pair_count", 0)) + 1):
             units.append((s, idx))
     return units

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai_grader, config, export, gitutil, grader_author, reports, storage
+from . import ai_grader, config, export, gitutil, grader_author, recalibrate, reports, storage
 from .modes import (
     DECK_MODE_IDS,
     ELEMENT_ORDER,
@@ -45,6 +45,15 @@ class PairUpdate(BaseModel):
 
 class DeckLevelUpdate(BaseModel):
     modes: Dict[str, Cell]
+    annotator: Optional[str] = None
+
+
+class AlignRequest(BaseModel):
+    drop_pages: List[int]  # 1-based output page numbers to drop
+    annotator: Optional[str] = None
+
+
+class AlignResetRequest(BaseModel):
     annotator: Optional[str] = None
 
 
@@ -245,13 +254,48 @@ def put_pair(slug: str, variant: str, index: int, body: PairUpdate) -> Dict:
         return storage.update_pair(slug, variant, index, _cells_to_dict(body.modes), body.annotator)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @app.put("/api/decks/{slug}/{variant}/deck-level")
 def put_deck_level(slug: str, variant: str, body: DeckLevelUpdate) -> Dict:
     _require_deck(slug)
     _require_variant(variant)
-    return {"deck_level": storage.update_deck_level(slug, variant, _cells_to_dict(body.modes), body.annotator)}
+    try:
+        return {"deck_level": storage.update_deck_level(slug, variant, _cells_to_dict(body.modes), body.annotator)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/decks/{slug}/{variant}/align")
+def align_deck(slug: str, variant: str, body: AlignRequest) -> Dict:
+    """Drop extra output pages so the variant lines up 1:1 with input, unlocking it
+    for grading. Destructive PDF edit with a one-time backup; no in-app reset."""
+    _require_deck(slug)
+    _require_variant(variant)
+    try:
+        return storage.align_variant(slug, variant, body.drop_pages, body.annotator)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/decks/{slug}/{variant}/align/reset")
+def reset_alignment(slug: str, variant: str, body: Optional[AlignResetRequest] = None) -> Dict:
+    """Undo a previous align: restore the one-time backup over the output PDF,
+    re-render, clear this variant's grades, and re-lock it (misaligned again)."""
+    _require_deck(slug)
+    _require_variant(variant)
+    try:
+        return storage.reset_alignment(slug, variant, body.annotator if body else None)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 # ----------------------------------------------------------------- ai graders
@@ -269,6 +313,11 @@ def run_ai_bulk(body: AIBulkRunRequest) -> Dict:
         if not body.slug:
             raise HTTPException(status_code=400, detail="scope 'deck' requires a slug")
         _require_deck(body.slug)
+        if not storage.is_variant_gradeable(body.slug, body.variant):
+            raise HTTPException(
+                status_code=409,
+                detail=f"deck '{body.slug}' variant '{body.variant}' is misaligned — align it before grading",
+            )
     try:
         return ai_grader.start_run(body.scope, body.variant, slug=body.slug, force=body.force)
     except ValueError as exc:
@@ -309,10 +358,95 @@ def get_ai_grades(slug: str, variant: str) -> Dict:
 def run_ai_pair(slug: str, variant: str, index: int, body: AIRunRequest) -> Dict:
     _require_deck(slug)
     _require_variant(variant)
+    if not storage.is_variant_gradeable(slug, variant):
+        raise HTTPException(
+            status_code=409,
+            detail=f"variant '{variant}' of '{slug}' is misaligned — align it before grading",
+        )
     try:
         return ai_grader.grade_pair(slug, variant, index, modes=body.modes, force=body.force)
     except ai_grader.AIGraderError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ----------------------------------------------------------------- recalibration
+@app.get("/api/modes/{mode_id}/recalibration/preview")
+def recalibration_preview(mode_id: int) -> Dict:
+    """Cheap pre-run estimate (dataset/split sizes + model-call count) for the
+    confirm dialog. Never renders or grades."""
+    if mode_id not in MODE_BY_ID:
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    return recalibrate.estimate(mode_id)
+
+
+@app.get("/api/modes/{mode_id}/recalibration")
+def recalibration_state(mode_id: int) -> Dict:
+    """Restore UI state: the active job (if any) + the latest run for this mode."""
+    if mode_id not in MODE_BY_ID:
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    latest = recalibrate.latest_run(mode_id)
+    return {
+        "active_job": recalibrate.active_job_for_mode(mode_id),
+        "latest_run": recalibrate.run_summary(latest) if latest else None,
+    }
+
+
+@app.post("/api/modes/{mode_id}/recalibration/run")
+def recalibration_run(mode_id: int) -> Dict:
+    """Kick off a background recalibration for one mode."""
+    if mode_id not in MODE_BY_ID:
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    try:
+        return recalibrate.start_recalibration(mode_id)
+    except recalibrate.RecalibrateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ai_grader.AIGraderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/api/recalibration/jobs/{job_id}")
+def recalibration_job(job_id: str) -> Dict:
+    job = recalibrate.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"job '{job_id}' not found")
+    return job
+
+
+@app.post("/api/recalibration/jobs/{job_id}/cancel")
+def recalibration_cancel(job_id: str) -> Dict:
+    job = recalibrate.cancel_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"job '{job_id}' not found")
+    return job
+
+
+@app.get("/api/recalibration/runs/{run_id}")
+def recalibration_get_run(run_id: str) -> Dict:
+    """Full run record (scores, confusion matrices, flips, themes, prompt diff)."""
+    try:
+        return recalibrate.load_run(run_id)
+    except recalibrate.RecalibrateError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/recalibration/runs/{run_id}/adopt")
+def recalibration_adopt(run_id: str) -> Dict:
+    """Adopt the winning prompt: write prompt.md + persist its verdicts. Leaves the
+    grader uncommitted for the operator to Commit & push."""
+    try:
+        return recalibrate.adopt_run(run_id)
+    except recalibrate.RecalibrateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ai_grader.AIGraderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/recalibration/runs/{run_id}/reject")
+def recalibration_reject(run_id: str) -> Dict:
+    try:
+        return recalibrate.reject_run(run_id)
+    except recalibrate.RecalibrateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/reports/mode/{mode_id}")

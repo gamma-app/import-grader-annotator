@@ -183,6 +183,68 @@ def generate_text(
     return {"text": text, "error": None if text else "empty response from model", "latencyMs": _elapsed()}
 
 
+def generate_vision_text(
+    parts: List[object],
+    model: str,
+    *,
+    system: Optional[str] = None,
+    max_tokens: int = 4096,
+    temperature: float = 0.2,
+    timeout: float = 300.0,
+) -> Dict:
+    """Multimodal completion. ``parts`` is an ordered list mixing ``str`` (text)
+    and ``Path`` (image) so callers can interleave each image with its caption.
+    Returns ``{text, error, latencyMs}`` (same shape as :func:`generate_text`)."""
+    start = time.time()
+
+    def _elapsed() -> int:
+        return int((time.time() - start) * 1000)
+
+    if not config.ANTHROPIC_API_KEY:
+        return {"text": None, "error": "ANTHROPIC_API_KEY is not set in .env", "latencyMs": 0}
+
+    content: List[Dict] = []
+    for part in parts:
+        if isinstance(part, Path):
+            if not part.exists():
+                return {"text": None, "error": f"image not found: {part}", "latencyMs": 0}
+            content.append(_image_block(part))
+        else:
+            content.append({"type": "text", "text": str(part)})
+
+    payload_obj: Dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": content}],
+    }
+    if system:
+        payload_obj["system"] = system
+    body = json.dumps(payload_obj).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{config.ANTHROPIC_BASE_URL}/v1/messages",
+        data=body,
+        method="POST",
+        headers={
+            "content-type": "application/json",
+            "x-api-key": config.ANTHROPIC_API_KEY,
+            "anthropic-version": config.ANTHROPIC_VERSION,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:500]
+        return {"text": None, "error": f"anthropic {exc.code}: {detail}", "latencyMs": _elapsed()}
+    except urllib.error.URLError as exc:
+        return {"text": None, "error": f"anthropic unreachable: {exc.reason}", "latencyMs": _elapsed()}
+
+    text = _text_from_response(payload)
+    return {"text": text, "error": None if text else "empty response from model", "latencyMs": _elapsed()}
+
+
 def list_models(timeout: float = 30.0) -> Dict:
     """GET /v1/models — used during setup to confirm a valid model id."""
     if not config.ANTHROPIC_API_KEY:

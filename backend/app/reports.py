@@ -2,7 +2,7 @@
 
 Read-only. For one (mode, variant) we join the human annotation store with the
 AI-grades store across every deck, keeping only slide pairs that have BOTH a
-human grade and an AI verdict in {pass, borderline, fail}. Everything else
+human grade and an AI verdict in {pass, borderline, fail, na}. Everything else
 (ungraded / missing / error / skip) is excluded but counted for context.
 Never contacts the eval-server and never triggers a render.
 """
@@ -13,17 +13,18 @@ from typing import Dict, List, Optional
 from . import ai_grader, config, storage
 from .modes import MODE_BY_ID, MODE_GRADERS
 
-# Only these three are real, comparable scores on both sides.
-_GRADES = ("pass", "borderline", "fail")
+# The comparable scores on both sides (human + agent). "na" is a first-class
+# verdict now, so na↔na counts as agreement and na↔other as a disagreement.
+_GRADES = ("pass", "borderline", "fail", "na")
 
 
 def _empty_dist() -> Dict[str, int]:
-    return {"pass": 0, "borderline": 0, "fail": 0}
+    return {g: 0 for g in _GRADES}
 
 
 def _cohen_kappa(human_dist: Dict[str, int], ai_dist: Dict[str, int],
                  agreements: int, n: int) -> Optional[float]:
-    """Chance-corrected agreement over the 3 classes. None when undefined."""
+    """Chance-corrected agreement over the comparable classes. None when undefined."""
     if not n:
         return None
     po = agreements / n

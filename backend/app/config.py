@@ -15,6 +15,9 @@ EXPORTS_DIR = DATA_DIR / "exports"
 # VLM grader outputs (import-evals) live beside annotations in the shared folder,
 # in their own files so they never collide with the human autosave.
 AI_GRADES_DIR = DATA_DIR / "ai_grades"
+# Grader recalibration run records (audit + reproducibility), shared like
+# annotations so a teammate can review a past run.
+RECALIBRATIONS_DIR = DATA_DIR / "recalibrations"
 
 # Human-authored, editable descriptions for each failure mode (shared like
 # annotations). Keyed by mode id; the taxonomy itself lives in modes.py.
@@ -62,6 +65,25 @@ AI_GRADER_CONCURRENCY = int(os.environ.get("AI_GRADER_CONCURRENCY", "3"))
 # Base URL the eval-server uses to fetch this app's rendered PNGs (same machine).
 SELF_BASE_URL = (os.environ.get("SLIDE_GRADER_SELF_URL") or "http://127.0.0.1:8000").rstrip("/")
 
+# --- Grader recalibration (optimize a grader prompt from human labels) ---
+# Optimizer model that writes candidate prompts; empty = use the grader's own model.
+RECALIBRATE_MODEL = os.environ.get("RECALIBRATE_MODEL") or ""
+# Number of independent, diverse candidate prompts generated per run.
+RECALIBRATE_CANDIDATES = int(os.environ.get("RECALIBRATE_CANDIDATES", "5"))
+# Train/validation/test split fractions (comma-separated; train is the remainder).
+RECALIBRATE_SPLIT = os.environ.get("RECALIBRATE_SPLIT") or "0.6,0.2,0.2"
+# Temperature for candidate diversity. Grading itself always runs at 0.0.
+RECALIBRATE_TEMPERATURE = float(os.environ.get("RECALIBRATE_TEMPERATURE", "0.7"))
+# RNG seed for the split + case sampling (reproducible runs).
+RECALIBRATE_SEED = int(os.environ.get("RECALIBRATE_SEED", "1234"))
+# Per candidate: how many disagreements get images (K) + correct-case anchors (M).
+RECALIBRATE_IMAGE_CASES = int(os.environ.get("RECALIBRATE_IMAGE_CASES", "12"))
+RECALIBRATE_ANCHORS = int(os.environ.get("RECALIBRATE_ANCHORS", "5"))
+# Token cap for the optimizer's {themes, prompt} JSON response.
+RECALIBRATE_MAX_TOKENS = int(os.environ.get("RECALIBRATE_MAX_TOKENS", "4096"))
+# Smallest dataset (pooled labeled pairs) a recalibration will run on.
+RECALIBRATE_MIN_DATASET = int(os.environ.get("RECALIBRATE_MIN_DATASET", "10"))
+
 INPUT_PDF = "input.pdf"
 INPUT_DIR = "input"
 
@@ -81,5 +103,5 @@ ANNOTATION_SCHEMA_VERSION = 2
 
 
 def ensure_dirs() -> None:
-    for d in (DECKS_DIR, ANNOTATIONS_DIR, EXPORTS_DIR, AI_GRADES_DIR, RENDER_CACHE_DIR):
+    for d in (DECKS_DIR, ANNOTATIONS_DIR, EXPORTS_DIR, AI_GRADES_DIR, RECALIBRATIONS_DIR, RENDER_CACHE_DIR):
         d.mkdir(parents=True, exist_ok=True)

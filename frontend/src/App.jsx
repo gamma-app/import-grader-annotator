@@ -3,6 +3,7 @@ import { Download, Loader2, Layers, BarChart3, BookOpen } from 'lucide-react'
 import { api } from './api'
 import Dashboard from './components/Dashboard.jsx'
 import DeckView from './components/DeckView.jsx'
+import AlignView from './components/AlignView.jsx'
 import ReportView from './components/ReportView.jsx'
 import ModeDirectory from './components/ModeDirectory.jsx'
 
@@ -124,6 +125,7 @@ export default function App() {
           <Dashboard
             variant={variant}
             onOpen={(slug) => setView({ name: 'deck', slug })}
+            onAlign={(slug) => setView({ name: 'align', slug })}
             showToast={showToast}
           />
         )}
@@ -136,6 +138,18 @@ export default function App() {
             modeFilter={modeFilter}
             onModeFilterChange={setModeFilter}
             onBack={() => setView({ name: 'dashboard' })}
+            onAlign={(slug) => setView({ name: 'align', slug })}
+            showToast={showToast}
+          />
+        )}
+        {view.name === 'align' && (
+          <AlignView
+            key={`align:${view.slug}:${variant}`}
+            slug={view.slug}
+            variant={variant}
+            modes={modes}
+            onBack={() => setView({ name: 'dashboard' })}
+            onDone={() => setView({ name: 'deck', slug: view.slug })}
             showToast={showToast}
           />
         )}

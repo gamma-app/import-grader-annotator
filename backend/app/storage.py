@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import threading
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from typing import Dict, List, Optional
 
 from . import config
 from .modes import DECK_MODE_IDS, PAIR_MODE_IDS
-from .pdf_split import pdf_page_count, render_pdf_to_pngs
+from .pdf_split import pdf_page_count, render_pdf_to_pngs, write_pdf_without_pages
 
 # Per-deck reentrant locks serialize read-modify-write of each annotation file
 # within this process. Cross-machine edits to the SAME deck are avoided by the
@@ -63,6 +64,13 @@ def _variant_png_dir(slug: str, vkey: str) -> Path:
     return config.RENDER_CACHE_DIR / slug / config.VARIANT_BY_KEY[vkey]["dir"]
 
 
+def _variant_pdf_backup(slug: str, vkey: str) -> Path:
+    """Pristine `<stem>.original.pdf` beside the canonical output PDF, written once
+    on the first align edit so the original can be restored by hand if needed."""
+    pdf = _variant_pdf(slug, vkey)
+    return pdf.with_name(f"{pdf.stem}.original{pdf.suffix}")
+
+
 def _annotation_path(slug: str) -> Path:
     return config.ANNOTATIONS_DIR / f"{slug}.json"
 
@@ -81,6 +89,30 @@ def _png_names(d: Path) -> List[str]:
 
 def _image_url(slug: str, side: str, name: str) -> str:
     return f"/images/{slug}/{side}/{name}"
+
+
+def _png_dir_version(png_dir: Path) -> str:
+    """Cache-bust token for a render dir: `count-totalsize-newestmtime`.
+
+    It changes whenever the dir is re-rendered (e.g. an align edit drops a page and
+    renumbers the PNGs), so image URLs built with it dodge stale browser caches that
+    would otherwise show the pre-edit pixels at the same `00N.png` URL — which looks
+    like "the wrong slide was dropped". Combining count + size + mtime makes the token
+    change even if a re-render lands in the same clock second (coarse-mtime filesystems)."""
+    try:
+        stats = [p.stat() for p in png_dir.glob("*.png")]
+    except OSError:
+        return ""
+    if not stats:
+        return ""
+    total = sum(s.st_size for s in stats)
+    newest = int(max(s.st_mtime for s in stats))
+    return f"{len(stats)}-{total}-{newest}"
+
+
+def _bust(url: str, ver: str) -> str:
+    """Append a cache-bust query (`?v=`). `ai_grader._image_path` strips it back off."""
+    return f"{url}?v={ver}" if ver else url
 
 
 # ---------------------------------------------------------------- rendering
@@ -243,7 +275,7 @@ def _sync_variant(slug: str, vkey: str, prev: Dict) -> Dict:
             }
         )
 
-    return {
+    result = {
         "available": available,
         "alignment": {
             "input_count": n_in,
@@ -256,6 +288,10 @@ def _sync_variant(slug: str, vkey: str, prev: Dict) -> Dict:
         "unpaired": unpaired,
         "updated_at": prev.get("updated_at", now),
     }
+    # Carry alignment provenance forward (set by align_variant); not derived data.
+    if prev.get("alignment_edit"):
+        result["alignment_edit"] = prev["alignment_edit"]
+    return result
 
 
 def sync_annotation(slug: str) -> Dict:
@@ -284,6 +320,23 @@ def sync_annotation(slug: str) -> Dict:
 def _variant_detail(ann: Dict, slug: str, vkey: str) -> Dict:
     v = ann["variants"][vkey]
     meta = config.VARIANT_BY_KEY[vkey]
+    # Cache-bust image URLs per side so a re-rendered deck (e.g. after an align edit)
+    # never shows stale browser-cached pixels at the same `00N.png` URL.
+    in_ver = _png_dir_version(_input_png_dir(slug))
+    out_ver = _png_dir_version(_variant_png_dir(slug, vkey))
+    pairs = [
+        {
+            **p,
+            "input_image": _bust(p["input_image"], in_ver),
+            "output_image": _bust(p["output_image"], out_ver),
+        }
+        for p in v["pairs"]
+    ]
+    unpaired_src = v.get("unpaired", {}) or {}
+    unpaired = {
+        "input": [_bust(u, in_ver) for u in unpaired_src.get("input", [])],
+        "output": [_bust(u, out_ver) for u in unpaired_src.get("output", [])],
+    }
     return {
         "deck_slug": slug,
         "title": ann.get("title", prettify(slug)),
@@ -292,9 +345,10 @@ def _variant_detail(ann: Dict, slug: str, vkey: str) -> Dict:
         "variant_label": meta["label"],
         "available": v.get("available", False),
         "alignment": v["alignment"],
+        "alignment_edit": v.get("alignment_edit"),
         "deck_level": v["deck_level"],
-        "pairs": v["pairs"],
-        "unpaired": v["unpaired"],
+        "pairs": pairs,
+        "unpaired": unpaired,
     }
 
 
@@ -314,10 +368,156 @@ def _load_for_update(slug: str, vkey: str) -> Dict:
     return ann
 
 
+def is_variant_gradeable(slug: str, vkey: str) -> bool:
+    """True when a variant has an output PDF whose page count matches the input
+    (i.e. not misaligned). Misaligned variants are locked from grading until
+    aligned via :func:`align_variant`."""
+    if vkey not in config.VARIANT_BY_KEY:
+        return False
+    summ = _variant_summary(slug, vkey, None)
+    return bool(summ["available"]) and not summ["misaligned"]
+
+
+def align_variant(
+    slug: str, vkey: str, drop_pages: List[int], annotator: Optional[str] = None
+) -> Dict:
+    """Drop `drop_pages` (1-based) from a misaligned variant's output PDF so it
+    lines up 1:1 with the input, re-render, and clear that variant's grades.
+
+    Destructive: rewrites the canonical output PDF in place after a one-time
+    `*.original.pdf` backup (kept for manual recovery; there is no in-app reset).
+    Returns the refreshed, now-unlocked deck detail.
+    """
+    if vkey not in config.VARIANT_BY_KEY:
+        raise KeyError(f"unknown variant '{vkey}'")
+    with _deck_lock(slug):
+        input_pdf = _input_pdf(slug)
+        out_pdf = _variant_pdf(slug, vkey)
+        if not input_pdf.exists():
+            raise ValueError(f"deck '{slug}' has no {config.INPUT_PDF}")
+        if not out_pdf.exists():
+            raise ValueError(f"variant '{vkey}' of deck '{slug}' has no output PDF")
+
+        input_count = pdf_page_count(input_pdf)
+        output_count = pdf_page_count(out_pdf)
+        if output_count == input_count:
+            raise RuntimeError(f"variant '{vkey}' of deck '{slug}' is already aligned")
+        if output_count < input_count:
+            raise ValueError(
+                "cannot align by dropping output slides when output < input "
+                f"({output_count} < {input_count})"
+            )
+
+        drop = [int(p) for p in drop_pages]
+        if len(set(drop)) != len(drop):
+            raise ValueError("drop_pages must be unique")
+        for p in drop:
+            if p < 1 or p > output_count:
+                raise ValueError(f"page {p} is out of range 1..{output_count}")
+        remaining = output_count - len(drop)
+        if remaining != input_count:
+            raise ValueError(
+                f"dropping {len(drop)} of {output_count} output pages leaves "
+                f"{remaining}, but the input has {input_count}"
+            )
+
+        # One-time backup of the pristine output PDF.
+        backup = _variant_pdf_backup(slug, vkey)
+        if not backup.exists():
+            shutil.copy2(out_pdf, backup)
+
+        # Rewrite the canonical output PDF without the dropped pages (atomic).
+        fd, tmp = tempfile.mkstemp(dir=str(deck_dir(slug)), suffix=".pdf.tmp")
+        os.close(fd)
+        try:
+            write_pdf_without_pages(out_pdf, Path(tmp), drop)
+            os.replace(tmp, out_pdf)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+        # Re-render this variant's PNG cache from the edited PDF.
+        render_pdf_to_pngs(out_pdf, _variant_png_dir(slug, vkey), width=config.RENDER_WIDTH)
+
+        # Drop this variant's AI verdicts (indices have shifted; must be re-run).
+        ai_path = config.AI_GRADES_DIR / f"{slug}__{vkey}.json"
+        if ai_path.exists():
+            ai_path.unlink()
+
+        # Reset this variant to a clean slate + record provenance. Storing only
+        # `alignment_edit` makes the next sync rebuild fresh (ungraded) pairs and
+        # deck-level cells from the new images.
+        ann = _migrate(load_annotation(slug) or {})
+        ann.setdefault("variants", {})[vkey] = {
+            "alignment_edit": {
+                "dropped_output_pages": drop,
+                "original_output_count": output_count,
+                "edited_at": _now(),
+                "edited_by": annotator or "",
+            }
+        }
+        if annotator:
+            ann["annotator"] = annotator
+        ann["updated_at"] = _now()
+        save_annotation(slug, ann)
+
+    return get_deck_detail(slug, vkey)
+
+
+def reset_alignment(slug: str, vkey: str, annotator: Optional[str] = None) -> Dict:
+    """Undo a previous align: restore the pristine ``*.original.pdf`` over the
+    canonical output PDF, re-render, clear this variant's grades + provenance, and
+    remove the backup. The deck returns to its original (misaligned) state and is
+    re-locked for grading. Returns the refreshed deck detail.
+    """
+    if vkey not in config.VARIANT_BY_KEY:
+        raise KeyError(f"unknown variant '{vkey}'")
+    with _deck_lock(slug):
+        out_pdf = _variant_pdf(slug, vkey)
+        backup = _variant_pdf_backup(slug, vkey)
+        if not backup.exists():
+            raise RuntimeError(
+                f"variant '{vkey}' of deck '{slug}' has no alignment backup to restore"
+            )
+
+        # Restore the pristine PDF (atomic), then drop the backup so the deck is
+        # back to its exact original on-disk state.
+        fd, tmp = tempfile.mkstemp(dir=str(deck_dir(slug)), suffix=".pdf.tmp")
+        os.close(fd)
+        try:
+            shutil.copy2(backup, tmp)
+            os.replace(tmp, out_pdf)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        backup.unlink()
+
+        # Re-render this variant's PNG cache from the restored PDF.
+        render_pdf_to_pngs(out_pdf, _variant_png_dir(slug, vkey), width=config.RENDER_WIDTH)
+
+        # Drop this variant's AI verdicts (indices have shifted back).
+        ai_path = config.AI_GRADES_DIR / f"{slug}__{vkey}.json"
+        if ai_path.exists():
+            ai_path.unlink()
+
+        # Reset this variant to a clean slate (drops grades + alignment_edit). The
+        # next sync rebuilds fresh cells; the restored original re-locks if misaligned.
+        ann = _migrate(load_annotation(slug) or {})
+        ann.setdefault("variants", {})[vkey] = {}
+        if annotator:
+            ann["annotator"] = annotator
+        ann["updated_at"] = _now()
+        save_annotation(slug, ann)
+
+    return get_deck_detail(slug, vkey)
+
+
 def update_pair(slug: str, vkey: str, index: int, modes: Dict[str, Dict], annotator: Optional[str] = None) -> Dict:
     if vkey not in config.VARIANT_BY_KEY:
         raise KeyError(f"unknown variant '{vkey}'")
     with _deck_lock(slug):
+        if not is_variant_gradeable(slug, vkey):
+            raise RuntimeError(f"variant '{vkey}' of deck '{slug}' is misaligned and locked from grading")
         ann = _load_for_update(slug, vkey)
         variant = ann["variants"][vkey]
         now = _now()
@@ -350,6 +550,8 @@ def update_deck_level(slug: str, vkey: str, modes: Dict[str, Dict], annotator: O
     if vkey not in config.VARIANT_BY_KEY:
         raise KeyError(f"unknown variant '{vkey}'")
     with _deck_lock(slug):
+        if not is_variant_gradeable(slug, vkey):
+            raise RuntimeError(f"variant '{vkey}' of deck '{slug}' is misaligned and locked from grading")
         ann = _load_for_update(slug, vkey)
         variant = ann["variants"][vkey]
         now = _now()
@@ -380,9 +582,11 @@ def _variant_summary(slug: str, vkey: str, ann: Optional[Dict]) -> Dict:
     pair_count = min(n_in, n_out)
 
     reviewed = 0
+    alignment_edit = None
     if ann and "variants" in ann:
         v = ann["variants"].get(vkey, {})
         reviewed = sum(1 for p in v.get("pairs", []) if p.get("reviewed"))
+        alignment_edit = v.get("alignment_edit")
 
     return {
         "available": has_variant_pdf,
@@ -392,6 +596,7 @@ def _variant_summary(slug: str, vkey: str, ann: Optional[Dict]) -> Dict:
         "pair_count": pair_count,
         "misaligned": has_input_pdf and has_variant_pdf and n_in != n_out,
         "reviewed_count": min(reviewed, pair_count),
+        "alignment_edit": alignment_edit,
     }
 
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, BookOpen, Loader2, Search, Copy, Check, AlertTriangle, Sparkles, RefreshCw, GitBranch, UploadCloud } from 'lucide-react'
+import { ArrowLeft, BookOpen, Loader2, Search, Copy, Check, AlertTriangle, Sparkles, RefreshCw, GitBranch, UploadCloud, Wand2, ClipboardCheck, X } from 'lucide-react'
 import { api } from '../api'
+import RecalibratePanel from './RecalibratePanel.jsx'
 
 const SEV = {
   P0: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
@@ -113,6 +114,13 @@ export default function ModeDirectory({ onBack, showToast }) {
   const [reinitBusy, setReinitBusy] = useState(false)
   const [git, setGit] = useState(null)
   const [commitBusy, setCommitBusy] = useState(false)
+  const [recalState, setRecalState] = useState(null) // { active_job, latest_run } for the selected mode
+  const [recalJob, setRecalJob] = useState(null) // the single active recalibration job (any mode)
+  const [recalConfirm, setRecalConfirm] = useState({ open: false, mode: null, preview: null, loading: false })
+  const [recalRun, setRecalRun] = useState(null) // full run record for the review panel
+  const [recalBusy, setRecalBusy] = useState(false) // starting / adopting / rejecting
+  const recalPoll = useRef(null)
+  const selectedIdRef = useRef(selectedId)
 
   useEffect(() => {
     api
@@ -252,6 +260,178 @@ export default function ModeDirectory({ onBack, showToast }) {
     }
   }
 
+  // ----- recalibration (optimize a grader prompt from human labels)
+  const stopRecalPoll = useCallback(() => {
+    if (recalPoll.current) {
+      clearInterval(recalPoll.current)
+      recalPoll.current = null
+    }
+  }, [])
+
+  const startRecalPoll = useCallback(
+    (jobId) => {
+      stopRecalPoll()
+      recalPoll.current = setInterval(async () => {
+        let j
+        try {
+          j = await api.getRecalibrationJob(jobId)
+        } catch {
+          stopRecalPoll()
+          return
+        }
+        setRecalJob(j)
+        if (j.status === 'running' || j.status === 'cancelling') return
+        stopRecalPoll()
+        if (j.status === 'done' && j.run_id) {
+          try {
+            setRecalRun(await api.getRecalibrationRun(j.run_id))
+          } catch (e) {
+            showToast?.({ type: 'error', msg: String(e) })
+          }
+          showToast?.({ type: 'success', msg: `Recalibration ready — review the proposal for #${j.mode_id}` })
+        } else if (j.status === 'error') {
+          showToast?.({ type: 'error', msg: `Recalibration failed: ${j.error || 'unknown error'}` })
+        } else if (j.status === 'cancelled') {
+          showToast?.({ type: 'success', msg: 'Recalibration cancelled' })
+        }
+        try {
+          setRecalState(await api.getRecalibrationState(selectedIdRef.current))
+        } catch {
+          /* non-fatal */
+        }
+      }, 2000)
+    },
+    [stopRecalPoll, showToast],
+  )
+
+  // Keep a ref to the selected id so async poll callbacks read the latest value.
+  useEffect(() => {
+    selectedIdRef.current = selectedId
+  }, [selectedId])
+
+  // Load recalibration state (active job + latest run) when the mode changes.
+  useEffect(() => {
+    if (selectedId == null) return undefined
+    let cancelled = false
+    api
+      .getRecalibrationState(selectedId)
+      .then((r) => {
+        if (cancelled) return
+        setRecalState(r)
+        const job = r.active_job
+        if (job && (job.status === 'running' || job.status === 'cancelling')) {
+          setRecalJob(job)
+          startRecalPoll(job.id)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [selectedId, startRecalPoll])
+
+  // Stop polling on unmount.
+  useEffect(() => () => stopRecalPoll(), [stopRecalPoll])
+
+  const openRecalConfirm = async (mode) => {
+    await flushNow()
+    setRecalConfirm({ open: true, mode, preview: null, loading: true })
+    try {
+      const preview = await api.getRecalibrationPreview(mode.id)
+      setRecalConfirm({ open: true, mode, preview, loading: false })
+    } catch (e) {
+      setRecalConfirm({ open: false, mode: null, preview: null, loading: false })
+      showToast?.({ type: 'error', msg: String(e) })
+    }
+  }
+
+  const startRecal = async (mode) => {
+    setRecalBusy(true)
+    try {
+      const j = await api.startRecalibration(mode.id)
+      setRecalJob(j)
+      setRecalConfirm({ open: false, mode: null, preview: null, loading: false })
+      if (j.status === 'running' || j.status === 'cancelling') startRecalPoll(j.id)
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    } finally {
+      setRecalBusy(false)
+    }
+  }
+
+  const cancelRecal = async () => {
+    if (!recalJob) return
+    try {
+      setRecalJob(await api.cancelRecalibrationJob(recalJob.id))
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    }
+  }
+
+  const openReview = async (runId) => {
+    try {
+      setRecalRun(await api.getRecalibrationRun(runId))
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    }
+  }
+
+  const doAdopt = async () => {
+    if (!recalRun) return
+    setRecalBusy(true)
+    try {
+      const r = await api.adoptRecalibration(recalRun.id)
+      setData((d) =>
+        d
+          ? d.map((m) =>
+              m.id === r.mode_id
+                ? { ...m, prompt: r.prompt, model: r.model || m.model, uncommitted: true, prompt_status: 'ok' }
+                : m,
+            )
+          : d,
+      )
+      setRecalRun((run) => (run ? { ...run, status: 'approved' } : run))
+      const cleared = r.cleared || 0
+      showToast?.({
+        type: 'success',
+        msg: `Adopted new prompt for #${r.mode_id} · ${r.persisted} verdict${r.persisted === 1 ? '' : 's'} kept, ${cleared} stale score${cleared === 1 ? '' : 's'} cleared`,
+      })
+      try {
+        setGit(await api.getGitStatus())
+      } catch {
+        /* non-fatal */
+      }
+      try {
+        setRecalState(await api.getRecalibrationState(r.mode_id))
+      } catch {
+        /* non-fatal */
+      }
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    } finally {
+      setRecalBusy(false)
+    }
+  }
+
+  const doReject = async () => {
+    if (!recalRun) return
+    setRecalBusy(true)
+    try {
+      await api.rejectRecalibration(recalRun.id)
+      showToast?.({ type: 'success', msg: 'Proposal rejected' })
+      setRecalRun(null)
+      try {
+        setRecalState(await api.getRecalibrationState(selectedIdRef.current))
+      } catch {
+        /* non-fatal */
+      }
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    } finally {
+      setRecalBusy(false)
+    }
+  }
+
   const textFor = (m) => (drafts[m.id] !== undefined ? drafts[m.id] : m.description || '')
 
   const filtered = useMemo(() => {
@@ -274,6 +454,9 @@ export default function ModeDirectory({ onBack, showToast }) {
   }, [filtered, elementOrder])
 
   const selected = data?.find((m) => m.id === selectedId) || null
+  const recalActive = !!(recalJob && (recalJob.status === 'running' || recalJob.status === 'cancelling'))
+  const recalForSelected = recalActive && recalJob.mode_id === selectedId
+  const proposal = recalState?.latest_run?.status === 'proposed' ? recalState.latest_run : null
 
   if (error) {
     return (
@@ -411,7 +594,7 @@ export default function ModeDirectory({ onBack, showToast }) {
                       {selected.uncommitted && (
                         <button
                           onClick={() => doCommit(selected)}
-                          disabled={commitBusy || reinitBusy}
+                          disabled={commitBusy || reinitBusy || recalForSelected}
                           title="Commit this prompt and push it to GitHub"
                           className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-emerald-600/60 text-emerald-200 hover:bg-emerald-600/15 disabled:opacity-40"
                         >
@@ -420,8 +603,30 @@ export default function ModeDirectory({ onBack, showToast }) {
                         </button>
                       )}
                       <button
+                        onClick={() => openRecalConfirm(selected)}
+                        disabled={recalActive || reinitBusy || commitBusy || recalBusy}
+                        title={
+                          recalActive
+                            ? 'A recalibration is already running'
+                            : 'Optimize this grader prompt from human-labeled slides'
+                        }
+                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-fuchsia-600/60 text-fuchsia-200 hover:bg-fuchsia-600/15 disabled:opacity-40"
+                      >
+                        {recalForSelected ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
+                        {recalForSelected ? 'Recalibrating…' : 'Recalibrate'}
+                      </button>
+                      {proposal && !recalForSelected && (
+                        <button
+                          onClick={() => openReview(proposal.id)}
+                          className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-amber-500/60 text-amber-200 hover:bg-amber-500/15"
+                          title="Review the pending recalibration proposal"
+                        >
+                          <ClipboardCheck size={13} /> Review proposal
+                        </button>
+                      )}
+                      <button
                         onClick={() => openReinit(selected)}
-                        disabled={!(textFor(selected) || '').trim() || reinitBusy || commitBusy}
+                        disabled={!(textFor(selected) || '').trim() || reinitBusy || commitBusy || recalForSelected}
                         title={
                           (textFor(selected) || '').trim()
                             ? 'Regenerate this grader prompt from the description'
@@ -434,6 +639,41 @@ export default function ModeDirectory({ onBack, showToast }) {
                     </div>
                   )}
                 </div>
+                {recalForSelected && (
+                  <div className="mb-2 rounded-lg border border-fuchsia-700/50 bg-fuchsia-950/20 p-2.5">
+                    <div className="flex items-center justify-between gap-3 mb-1.5">
+                      <div className="flex items-center gap-2 text-xs text-slate-200 min-w-0">
+                        <Loader2 size={13} className="animate-spin text-fuchsia-300 shrink-0" />
+                        <span className="font-medium shrink-0">Recalibrating</span>
+                        <span className="text-slate-400 truncate">· {recalJob.stage || 'working…'}</span>
+                      </div>
+                      <button
+                        onClick={cancelRecal}
+                        disabled={recalJob.status === 'cancelling'}
+                        className="shrink-0 text-[11px] px-2 py-0.5 rounded border border-slate-600 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        {recalJob.status === 'cancelling' ? 'Cancelling…' : 'Cancel'}
+                      </button>
+                    </div>
+                    <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-fuchsia-500 transition-all"
+                        style={{ width: `${recalJob.total > 0 ? Math.round((recalJob.done / recalJob.total) * 100) : 0}%` }}
+                      />
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-1">
+                      {recalJob.done}/{recalJob.total} model calls · {recalJob.message || recalJob.stage}
+                    </div>
+                  </div>
+                )}
+                {!recalForSelected && proposal && (
+                  <button
+                    onClick={() => openReview(proposal.id)}
+                    className="mb-2 w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1.5 rounded border border-amber-500/50 bg-amber-500/10 text-amber-200 hover:bg-amber-500/15"
+                  >
+                    <ClipboardCheck size={13} /> A recalibration proposal is ready — review &amp; approve
+                  </button>
+                )}
                 <PromptBlock mode={selected} />
               </div>
             </div>
@@ -491,6 +731,112 @@ export default function ModeDirectory({ onBack, showToast }) {
             </div>
           </div>
         </div>
+      )}
+
+      {recalConfirm.open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !recalBusy && setRecalConfirm({ open: false, mode: null, preview: null, loading: false })}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-3 text-slate-100 font-semibold">
+              <Wand2 size={16} className="text-fuchsia-400" /> Recalibrate grader prompt
+            </div>
+            {recalConfirm.loading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+                <Loader2 size={15} className="animate-spin" /> Checking labeled data…
+              </div>
+            ) : recalConfirm.preview && !recalConfirm.preview.eligible ? (
+              <>
+                <p className="text-sm text-slate-300 mb-2">
+                  Not enough labeled data to recalibrate{' '}
+                  <span className="font-medium text-slate-100">
+                    #{recalConfirm.mode?.id} {recalConfirm.mode?.name}
+                  </span>
+                  .
+                </p>
+                <p className="text-xs text-slate-500 mb-4">{recalConfirm.preview.reason}</p>
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => setRecalConfirm({ open: false, mode: null, preview: null, loading: false })}
+                    className="text-sm px-3 py-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            ) : recalConfirm.preview ? (
+              <>
+                <p className="text-sm text-slate-300 mb-3">
+                  Optimize the{' '}
+                  <span className="font-medium text-slate-100">
+                    #{recalConfirm.mode?.id} {recalConfirm.mode?.name}
+                  </span>{' '}
+                  grader from human-labeled slides. This runs in the background and proposes a new
+                  prompt for your review — it does <span className="text-slate-100 font-medium">not</span>{' '}
+                  change anything until you approve.
+                </p>
+                <div className="text-xs text-slate-400 bg-slate-950/40 border border-slate-800 rounded-lg p-3 mb-4 space-y-1">
+                  <div className="flex justify-between">
+                    <span>Labeled pairs</span>
+                    <span className="text-slate-200">{recalConfirm.preview.dataset_size}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Split (train/val/test)</span>
+                    <span className="text-slate-200">
+                      {recalConfirm.preview.split?.train}/{recalConfirm.preview.split?.val}/{recalConfirm.preview.split?.test}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Candidates</span>
+                    <span className="text-slate-200">{recalConfirm.preview.candidates}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>~ model calls</span>
+                    <span className="text-slate-200">{recalConfirm.preview.estimated_calls}</span>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setRecalConfirm({ open: false, mode: null, preview: null, loading: false })}
+                    disabled={recalBusy}
+                    className="text-sm px-3 py-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => startRecal(recalConfirm.mode)}
+                    disabled={recalBusy}
+                    className="text-sm px-3 py-1.5 rounded border border-fuchsia-600 bg-fuchsia-600/20 text-fuchsia-100 hover:bg-fuchsia-600/30 disabled:opacity-40 flex items-center gap-1.5"
+                  >
+                    {recalBusy ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" /> Starting…
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 size={14} /> Run recalibration
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {recalRun && (
+        <RecalibratePanel
+          run={recalRun}
+          busy={recalBusy}
+          onClose={() => setRecalRun(null)}
+          onAdopt={doAdopt}
+          onReject={doReject}
+        />
       )}
     </div>
   )

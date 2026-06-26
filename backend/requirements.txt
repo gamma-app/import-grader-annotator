@@ -4,3 +4,6 @@ fastapi>=0.115
 uvicorn>=0.30
 pymupdf>=1.24
 pydantic>=2.9
+
+# Dev/test only (optional): `pip install pytest` to run backend/tests/.
+# pytest>=8.0

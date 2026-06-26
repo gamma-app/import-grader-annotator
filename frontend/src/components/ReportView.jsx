@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Loader2, X, ChevronLeft, ChevronRight, BarChart3 } from 'lucide-react'
+import { ArrowLeft, Loader2, X, ChevronLeft, ChevronRight, BarChart3, FileDown } from 'lucide-react'
 import { api } from '../api'
 import ImageViewer from './ImageViewer.jsx'
 import { AI_VERDICT_CHIP, AI_VERDICT_LABEL } from '../constants'
 
-const GRADES = ['pass', 'borderline', 'fail']
-const GRADE_LABEL = { pass: 'Pass', borderline: 'Borderline', fail: 'Fail' }
-const SEG = { pass: 'bg-emerald-500', borderline: 'bg-amber-500', fail: 'bg-rose-500' }
+const GRADES = ['pass', 'borderline', 'fail', 'na']
+const GRADE_LABEL = { pass: 'Pass', borderline: 'Borderline', fail: 'Fail', na: 'N/A' }
+const SEG = { pass: 'bg-emerald-500', borderline: 'bg-amber-500', fail: 'bg-rose-500', na: 'bg-slate-500' }
 
 function ScoreChip({ value }) {
   return (
@@ -49,7 +49,7 @@ function ConfusionMatrix({ confusion }) {
       <div className="text-xs text-slate-400 mb-2">
         Confusion (rows = <span className="text-slate-300">human</span>, columns = <span className="text-slate-300">agent</span>); diagonal = agreement
       </div>
-      <div className="inline-grid" style={{ gridTemplateColumns: 'auto repeat(3, 3.5rem)' }}>
+      <div className="inline-grid" style={{ gridTemplateColumns: `auto repeat(${GRADES.length}, 3.5rem)` }}>
         <div />
         {GRADES.map((a) => (
           <div key={a} className="text-[10px] text-slate-400 text-center pb-1 font-medium">{GRADE_LABEL[a]}</div>
@@ -62,7 +62,7 @@ function ConfusionMatrix({ confusion }) {
   )
 }
 
-// One matrix row: a human-label header cell + 3 count cells.
+// One matrix row: a human-label header cell + one count cell per class.
 function MatrixRow({ h, confusion }) {
   return (
     <>
@@ -190,6 +190,47 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
 
   const n = report?.counts?.both ?? 0
   const excluded = report ? report.counts.human_only + report.counts.ai_only + report.counts.no_data : 0
+  const canExport = !!report && n > 0
+  const [exporting, setExporting] = useState(false)
+
+  // Build a polished PDF (cover + stats + top disagreements) with @react-pdf and
+  // trigger a download. The renderer + document module are lazy-loaded on click
+  // so the ~0.5MB lib stays out of the initial app bundle.
+  const handleExport = useCallback(async () => {
+    if (!canExport || exporting) return
+    setExporting(true)
+    try {
+      const [{ pdf }, { default: ReportPdf }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('./ReportPdfDocument.jsx'),
+      ])
+      const blob = await pdf(<ReportPdf report={report} maxPairs={10} />).toBlob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `agreement-report_mode-${report.mode.id}_${variant}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      sessionStorage.removeItem('pdfChunkReload')
+    } catch (e) {
+      // A frontend rebuild changes hashed chunk names; a tab opened before the
+      // rebuild 404s on the lazy-loaded PDF chunk. Reload once to pick up the
+      // fresh assets, then the user can retry. Guard against reload loops.
+      const msg = String(e?.message || e)
+      const staleChunk = /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed/i.test(msg)
+      if (staleChunk && !sessionStorage.getItem('pdfChunkReload')) {
+        sessionStorage.setItem('pdfChunkReload', '1')
+        showToast({ type: 'error', msg: 'A newer version is available — reloading, then click Export again.' })
+        setTimeout(() => window.location.reload(), 1200)
+        return
+      }
+      showToast({ type: 'error', msg: `PDF export failed: ${e}` })
+    } finally {
+      setExporting(false)
+    }
+  }, [canExport, exporting, report, variant, showToast])
 
   return (
     <div className="h-full flex flex-col">
@@ -215,6 +256,15 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
         </span>
         <div className="flex-1" />
         {loading && <Loader2 size={16} className="animate-spin text-slate-400" />}
+        <button
+          onClick={handleExport}
+          disabled={!canExport || exporting}
+          title={canExport ? 'Export this report as a PDF' : 'No comparable data to export'}
+          className="flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-50 disabled:hover:bg-transparent"
+        >
+          {exporting ? <Loader2 size={16} className="animate-spin" /> : <FileDown size={16} />}
+          {exporting ? 'Exporting…' : 'Export PDF'}
+        </button>
       </div>
 
       {/* body */}

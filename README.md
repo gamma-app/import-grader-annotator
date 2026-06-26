@@ -118,6 +118,23 @@ data/decks/<slug>/
   A deck missing one output still works on the other page; the missing one shows under
   **Awaiting output**.
 
+### Aligning misaligned decks
+
+If a variant's output PDF has **more** pages than the input, the 1:1 pairing is wrong
+and the deck is flagged **misaligned** and **locked from grading**. To fix it, open the
+deck (or click **Align** on its card) and use **Align mode**:
+
+1. The input slides show on the left for reference; click the **extra output slides** to
+   mark them for dropping (a live preview shows the resulting `input ↔ output` pairing).
+2. When the remaining output count matches the input, click **Save alignment**.
+
+This **destructively edits the output PDF** (dropping the marked pages), re-renders, and
+unlocks the deck. The original is backed up once to `<variant>_output.original.pdf` beside
+it. **Dropped the wrong slide?** Click **Reset** in the aligned deck's header to restore
+the original, re-lock the deck, and re-align (you can also restore that backup over the
+output PDF by hand). Decks where the output has *fewer* pages than the input can't be
+fixed this way.
+
 ### Adding a deck to the shared Drive
 
 Day-to-day the data dir *is* your Google Drive folder, so adding a deck is just:
@@ -192,11 +209,14 @@ Drive may create a "conflicted copy" of that one `<slug>.json`. Dividing decks a
 
 `GET /api/modes` · `GET /api/decks` · `POST /api/rescan` ·
 `GET /api/decks/{slug}/{variant}` · `PUT /api/decks/{slug}/{variant}/pairs/{index}` ·
-`PUT /api/decks/{slug}/{variant}/deck-level` · `POST /api/export` ·
+`PUT /api/decks/{slug}/{variant}/deck-level` · `POST /api/decks/{slug}/{variant}/align` ·
+`POST /api/decks/{slug}/{variant}/align/reset` · `POST /api/export` ·
 images served at `/images/<slug>/{input|ideal|current}/...` (`{variant}` is `ideal` or `current`)
 
 ## Design docs
 
-- [`docs/recalibration-design.md`](docs/recalibration-design.md) — planned per-grader
+- [`docs/alignment-design.md`](docs/alignment-design.md) — the **deck alignment**
+  (misaligned-deck repair) feature described above. Implemented.
+- [`docs/recalibration-design.md`](docs/recalibration-design.md) — the per-grader
   **Recalibrate** flow (a prompt-iteration loop that tunes a grader's prompt against human
-  labels). Design only, not yet built.
+  labels). Implemented (`backend/app/recalibrate.py`, `frontend/src/components/RecalibratePanel.jsx`).

@@ -27,6 +27,23 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ modes }),
     }),
+
+  // Drop extra output pages (1-based) so a misaligned variant lines up 1:1 with
+  // input, unlocking it for grading. Destructive PDF edit (backed up once; see
+  // resetAlignment to undo).
+  alignDeck: (slug, variant, dropPages) =>
+    req(`/api/decks/${encodeURIComponent(slug)}/${variant}/align`, {
+      method: 'POST',
+      body: JSON.stringify({ drop_pages: dropPages }),
+    }),
+
+  // Undo a prior align: restore the one-time backup, re-render, re-lock the deck.
+  resetAlignment: (slug, variant) =>
+    req(`/api/decks/${encodeURIComponent(slug)}/${variant}/align/reset`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
   runExport: () => req('/api/export', { method: 'POST' }),
 
   // Human-vs-AI agreement report for one pair-level mode + variant.
@@ -73,4 +90,23 @@ export const api = {
   getAiJob: (jobId) => req(`/api/ai-grades/jobs/${encodeURIComponent(jobId)}`),
   cancelAiJob: (jobId) =>
     req(`/api/ai-grades/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+
+  // --- Grader recalibration (optimize a grader prompt from human labels) ---
+  // Cheap pre-run estimate (dataset/split sizes + model-call count) for the dialog.
+  getRecalibrationPreview: (modeId) => req(`/api/modes/${modeId}/recalibration/preview`),
+  // Restore state for a mode: the active job (if any) + the latest run summary.
+  getRecalibrationState: (modeId) => req(`/api/modes/${modeId}/recalibration`),
+  startRecalibration: (modeId) =>
+    req(`/api/modes/${modeId}/recalibration/run`, { method: 'POST', body: JSON.stringify({}) }),
+  getRecalibrationJob: (jobId) =>
+    req(`/api/recalibration/jobs/${encodeURIComponent(jobId)}`),
+  cancelRecalibrationJob: (jobId) =>
+    req(`/api/recalibration/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+  // Full run record (scores, confusion matrices, flips, themes, prompt diff).
+  getRecalibrationRun: (runId) =>
+    req(`/api/recalibration/runs/${encodeURIComponent(runId)}`),
+  adoptRecalibration: (runId) =>
+    req(`/api/recalibration/runs/${encodeURIComponent(runId)}/adopt`, { method: 'POST' }),
+  rejectRecalibration: (runId) =>
+    req(`/api/recalibration/runs/${encodeURIComponent(runId)}/reject`, { method: 'POST' }),
 }

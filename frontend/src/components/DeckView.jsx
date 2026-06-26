@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Check, AlertTriangle, Palette, X, Sparkles } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Check, AlertTriangle, Palette, X, Sparkles, Scissors, RotateCcw } from 'lucide-react'
 import { api } from '../api'
 import ImageViewer from './ImageViewer.jsx'
 import ModePanel, { ModeRow } from './ModePanel.jsx'
 import ModeFilter from './ModeFilter.jsx'
 import AiStatusDot from './AiStatusDot.jsx'
 
-export default function DeckView({ slug, variant, modes, modeFilter, onModeFilterChange, onBack, showToast }) {
+export default function DeckView({ slug, variant, modes, modeFilter, onModeFilterChange, onBack, onAlign, showToast }) {
   const [deck, setDeck] = useState(null)
   const [index, setIndex] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const [showDeckPanel, setShowDeckPanel] = useState(false)
   // AI grader (import-evals) — view-only overlay, fetched per slug:variant.
   const [aiStatus, setAiStatus] = useState(null)
@@ -93,6 +94,29 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
   }, [])
 
   useEffect(() => () => flushAll(), [flushAll])
+
+  // Undo a prior alignment: restore the backup, re-lock as misaligned, clear grades.
+  const onResetAlign = useCallback(async () => {
+    const dropped = deckRef.current?.alignment_edit?.dropped_output_pages?.length || 0
+    const ok = window.confirm(
+      `Reset alignment for this variant?\n\nThis restores the original output PDF (re-adding ${dropped} dropped slide${
+        dropped === 1 ? '' : 's'
+      }), re-locks the deck as misaligned, and clears this variant's grades. You can then re-align.`,
+    )
+    if (!ok) return
+    flushAll()
+    setResetting(true)
+    try {
+      const d = await api.resetAlignment(slug, variant)
+      setDeck(d)
+      setIndex(0)
+      showToast({ type: 'success', msg: 'Alignment reset — original restored, deck re-locked.' })
+    } catch (e) {
+      showToast({ type: 'error', msg: String(e) })
+    } finally {
+      setResetting(false)
+    }
+  }, [slug, variant, showToast, flushAll])
 
   const savePair = useCallback(
     (pairIndex) => {
@@ -236,6 +260,51 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
     )
   }
 
+  // Misaligned variants are locked from grading until aligned (output pages dropped
+  // to line up 1:1 with input). Replace the grading screen with a lock banner.
+  if (deck.alignment.misaligned) {
+    const { input_count: inCount, output_count: outCount } = deck.alignment
+    const canAlign = outCount > inCount
+    return (
+      <div className="h-full flex flex-col">
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-slate-800 bg-slate-900">
+          <button onClick={onBack} className="flex items-center gap-1 text-sm text-slate-300 hover:text-white">
+            <ArrowLeft size={16} /> Decks
+          </button>
+          <div className="h-4 w-px bg-slate-700" />
+          <div className="text-sm font-semibold text-slate-100 truncate">{deck.title}</div>
+          <span className="shrink-0 text-xs px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-200 border border-violet-500/30">
+            {deck.variant_label}
+          </span>
+          <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+            <AlertTriangle size={12} /> misaligned {inCount}≠{outCount}
+          </span>
+        </div>
+        <div className="flex-1 flex items-center justify-center p-8 text-center">
+          <div className="max-w-md">
+            <AlertTriangle className="mx-auto mb-3 text-amber-400" size={32} />
+            <h2 className="text-lg font-semibold text-slate-100 mb-1">This deck is misaligned</h2>
+            <p className="text-sm text-slate-400 mb-4">
+              The {deck.variant_label} output has {outCount} slides but the input has {inCount}, so the
+              per-slide pairing is wrong.{' '}
+              {canAlign
+                ? 'Drop the extra output slides to align it before grading.'
+                : "It can't be aligned by dropping output slides (output < input)."}
+            </p>
+            {canAlign && (
+              <button
+                onClick={() => onAlign?.(slug)}
+                className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded"
+              >
+                <Scissors size={16} /> Align deck
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const pair = deck.pairs[index]
   const aiForPair = pair ? aiGrades.pairs?.[String(pair.index)] || {} : {}
   const reviewedCount = deck.pairs.filter((p) => p.reviewed).length
@@ -259,6 +328,21 @@ export default function DeckView({ slug, variant, modes, modeFilter, onModeFilte
         {deck.alignment.misaligned && (
           <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
             <AlertTriangle size={12} /> misaligned {deck.alignment.input_count}≠{deck.alignment.output_count}
+          </span>
+        )}
+        {deck.alignment_edit && (
+          <span className="flex items-center gap-1.5 text-xs px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-300 border border-slate-600/40">
+            <Scissors size={12} className="text-amber-300" />
+            aligned · dropped {deck.alignment_edit.dropped_output_pages.length}
+            <button
+              onClick={onResetAlign}
+              disabled={resetting}
+              title="Restore the original output PDF and re-lock for re-aligning"
+              className="ml-1 inline-flex items-center gap-1 text-indigo-300 hover:text-indigo-200 disabled:opacity-50"
+            >
+              {resetting ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
+              Reset
+            </button>
           </span>
         )}
 

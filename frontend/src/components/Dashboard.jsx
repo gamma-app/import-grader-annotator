@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { AlertTriangle, RefreshCw, FileWarning, Loader2, ChevronRight, ChevronDown, Sparkles } from 'lucide-react'
+import { AlertTriangle, RefreshCw, FileWarning, Loader2, ChevronRight, ChevronDown, Sparkles, Scissors } from 'lucide-react'
 import { api } from '../api'
 import AiStatusDot from './AiStatusDot.jsx'
 
@@ -21,8 +21,9 @@ function ProgressBar({ done, total }) {
   )
 }
 
-function DeckCard({ d, stats, onOpen, aiReady, jobActive, activeSlug, onRunDeck }) {
+function DeckCard({ d, stats, onOpen, onAlign, aiReady, jobActive, activeSlug, onRunDeck }) {
   const openable = stats.available && stats.pair_count > 0
+  const canAlign = stats.misaligned && stats.output_count > stats.input_count
   const aiPct = stats.ai_total > 0 ? Math.round((stats.ai_graded / stats.ai_total) * 100) : 0
   const grading = activeSlug === d.slug
   return (
@@ -52,7 +53,19 @@ function DeckCard({ d, stats, onOpen, aiReady, jobActive, activeSlug, onRunDeck 
 
       <ProgressBar done={stats.reviewed_count} total={stats.pair_count} />
 
-      {openable && (
+      {canAlign && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onAlign(d.slug)
+          }}
+          className="mt-3 w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1.5 rounded border border-amber-500/60 text-amber-200 hover:bg-amber-500/10"
+        >
+          <Scissors size={13} /> Align deck
+        </button>
+      )}
+
+      {openable && !stats.misaligned && (
         <div className="mt-3 flex items-end gap-2">
           <div className="flex-1 min-w-0">
             <div className="flex justify-between text-[11px] text-slate-500 mb-1">
@@ -102,7 +115,7 @@ function DeckCard({ d, stats, onOpen, aiReady, jobActive, activeSlug, onRunDeck 
   )
 }
 
-export default function Dashboard({ variant, onOpen, showToast }) {
+export default function Dashboard({ variant, onOpen, onAlign, showToast }) {
   const [decks, setDecks] = useState(null)
   const [busy, setBusy] = useState(false)
   const [showMisaligned, setShowMisaligned] = useState(false)
@@ -316,6 +329,7 @@ export default function Dashboard({ variant, onOpen, showToast }) {
                   d={d}
                   stats={stats}
                   onOpen={onOpen}
+                  onAlign={onAlign}
                   aiReady={aiReady}
                   jobActive={jobActive}
                   activeSlug={job?.current_slug}
@@ -340,7 +354,7 @@ export default function Dashboard({ variant, onOpen, showToast }) {
                     <AlertTriangle size={15} /> Misaligned decks ({misaligned.length})
                   </span>
                   <span className="text-xs text-slate-500 hidden sm:inline">
-                    input ≠ output page count — set aside for manual handling
+                    input ≠ output page count — drop extra output slides to align
                   </span>
                 </button>
                 {showMisaligned && (
@@ -351,6 +365,7 @@ export default function Dashboard({ variant, onOpen, showToast }) {
                   d={d}
                   stats={stats}
                   onOpen={onOpen}
+                  onAlign={onAlign}
                   aiReady={aiReady}
                   jobActive={jobActive}
                   activeSlug={job?.current_slug}
@@ -388,6 +403,7 @@ export default function Dashboard({ variant, onOpen, showToast }) {
                   d={d}
                   stats={stats}
                   onOpen={onOpen}
+                  onAlign={onAlign}
                   aiReady={aiReady}
                   jobActive={jobActive}
                   activeSlug={job?.current_slug}

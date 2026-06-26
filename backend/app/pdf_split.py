@@ -33,3 +33,23 @@ def render_pdf_to_pngs(pdf_path: Path, out_dir: Path, width: int = 1600) -> List
 def pdf_page_count(pdf_path: Path) -> int:
     with fitz.open(pdf_path) as doc:
         return doc.page_count
+
+
+def write_pdf_without_pages(src: Path, dst: Path, drop_pages_1based: List[int]) -> int:
+    """Write `src` to `dst` keeping every page except those in `drop_pages_1based`.
+
+    Pages are 1-based to match the rendered PNG numbering. Returns the new page
+    count. Raises ValueError if any page is out of range or all pages are dropped.
+    """
+    with fitz.open(src) as doc:
+        total = doc.page_count
+        drop = {int(p) for p in drop_pages_1based}
+        for p in drop:
+            if p < 1 or p > total:
+                raise ValueError(f"page {p} is out of range 1..{total}")
+        keep = [i for i in range(total) if (i + 1) not in drop]  # 0-based
+        if not keep:
+            raise ValueError("refusing to write a PDF with zero pages")
+        doc.select(keep)
+        doc.save(str(dst))
+        return len(keep)

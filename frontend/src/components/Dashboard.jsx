@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { AlertTriangle, RefreshCw, FileWarning, Loader2, ChevronRight, ChevronDown, Sparkles, Scissors } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Loader2, ChevronRight, ChevronDown, Sparkles, Scissors } from 'lucide-react'
 import { api } from '../api'
 import AiStatusDot from './AiStatusDot.jsx'
 
@@ -95,11 +95,6 @@ function DeckCard({ d, stats, onOpen, onAlign, aiReady, jobActive, activeSlug, o
       )}
 
       <div className="flex flex-wrap gap-1.5 mt-3">
-        {!stats.available && (
-          <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30">
-            <FileWarning size={12} /> output not uploaded
-          </span>
-        )}
         {stats.misaligned && (
           <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
             <AlertTriangle size={12} /> {stats.input_count}≠{stats.output_count}
@@ -119,7 +114,6 @@ export default function Dashboard({ variant, onOpen, onAlign, showToast }) {
   const [decks, setDecks] = useState(null)
   const [busy, setBusy] = useState(false)
   const [showMisaligned, setShowMisaligned] = useState(false)
-  const [showUnavailable, setShowUnavailable] = useState(false)
   const [aiStatus, setAiStatus] = useState(null)
   const [job, setJob] = useState(null)
   const pollRef = useRef(null)
@@ -237,7 +231,6 @@ export default function Dashboard({ variant, onOpen, onAlign, showToast }) {
   const available = withStats.filter((x) => x.stats.available)
   const aligned = available.filter((x) => !x.stats.misaligned)
   const misaligned = available.filter((x) => x.stats.misaligned)
-  const unavailable = withStats.filter((x) => !x.stats.available)
 
   return (
     <div className="h-full overflow-auto thin-scroll p-6">
@@ -248,7 +241,6 @@ export default function Dashboard({ variant, onOpen, onAlign, showToast }) {
             <p className="text-sm text-slate-400">
               {aligned.length} aligned
               {misaligned.length > 0 ? ` · ${misaligned.length} misaligned` : ''}
-              {unavailable.length > 0 ? ` · ${unavailable.length} awaiting output` : ''}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -377,43 +369,6 @@ export default function Dashboard({ variant, onOpen, onAlign, showToast }) {
               </div>
             )}
 
-            {unavailable.length > 0 && (
-              <div className="mt-8">
-                <button
-                  onClick={() => setShowUnavailable((s) => !s)}
-                  className="flex items-center gap-2 w-full text-left mb-3"
-                >
-                  {showUnavailable ? (
-                    <ChevronDown size={16} className="text-slate-400" />
-                  ) : (
-                    <ChevronRight size={16} className="text-slate-400" />
-                  )}
-                  <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-300">
-                    <FileWarning size={15} /> Awaiting output ({unavailable.length})
-                  </span>
-                  <span className="text-xs text-slate-500 hidden sm:inline">
-                    no output PDF uploaded for this view yet
-                  </span>
-                </button>
-                {showUnavailable && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 border-l-2 border-slate-600/40 pl-4">
-                    {unavailable.map(({ d, stats }) => (
-                      <DeckCard
-                  key={d.slug}
-                  d={d}
-                  stats={stats}
-                  onOpen={onOpen}
-                  onAlign={onAlign}
-                  aiReady={aiReady}
-                  jobActive={jobActive}
-                  activeSlug={job?.current_slug}
-                  onRunDeck={(slug) => startRun('deck', slug)}
-                />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
           </>
         )}
       </div>

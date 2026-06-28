@@ -36,7 +36,7 @@ def _cohen_kappa(human_dist: Dict[str, int], ai_dist: Dict[str, int],
 
 # Pseudo-variant: pool every real variant into one combined dataset.
 COMBINED_VARIANT = "both"
-COMBINED_LABEL = "Both variants"
+COMBINED_LABEL = "All variants"
 
 
 def mode_report(mode_id: int, variant: str) -> Dict:

@@ -267,7 +267,7 @@ export default function ReportView({ variant, modes, showToast, onBack }) {
           {modes.variants.map((v) => (
             <option key={v.key} value={v.key}>{v.label}</option>
           ))}
-          <option value="both">Both variants</option>
+          <option value="both">All variants</option>
         </select>
         <div className="flex-1" />
         {loading && <Loader2 size={16} className="animate-spin text-slate-400" />}

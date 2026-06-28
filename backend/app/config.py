@@ -91,6 +91,7 @@ INPUT_DIR = "input"
 VARIANTS = [
     {"key": "ideal", "label": "Deck Doctor", "pdf": "ideal_output.pdf", "dir": "ideal"},
     {"key": "current", "label": "Current Import", "pdf": "current_output.pdf", "dir": "current"},
+    {"key": "programmatic", "label": "Programmatic Import", "pdf": "programmatic_output.pdf", "dir": "programmatic"},
 ]
 VARIANT_KEYS = [v["key"] for v in VARIANTS]
 VARIANT_BY_KEY = {v["key"]: v for v in VARIANTS}

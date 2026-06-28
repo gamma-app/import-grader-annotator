@@ -32,10 +32,10 @@ edit can be **Reset**). Misaligned variants are **locked from grading** until al
 ## How decks work today (grounding)
 
 - A deck is a folder `data/decks/<slug>/` containing **PDFs only**:
-  `input.pdf`, `ideal_output.pdf`, `current_output.pdf` (`config.INPUT_PDF`,
+  `input.pdf`, `ideal_output.pdf`, `current_output.pdf`, `programmatic_output.pdf` (`config.INPUT_PDF`,
   `config.VARIANTS`). These PDFs are the **shared source of truth**, synced to the
   team Drive folder by `scripts/seed_drive.sh`.
-- PNGs are a **local, regenerable cache** under `.cache/renders/<slug>/{input,ideal,current}/NNN.png`
+- PNGs are a **local, regenerable cache** under `.cache/renders/<slug>/{input,ideal,current,programmatic}/NNN.png`
   (`config.RENDER_CACHE_DIR`). `storage.ensure_rendered()` re-renders a PDF→PNGs
   whenever the PDF is newer than the newest PNG or PNGs are missing
   (`storage._needs_render`). Rendering is `pdf_split.render_pdf_to_pngs()` (PyMuPDF
@@ -73,8 +73,9 @@ Align mode = a guided "delete the extra output pages" workspace.
 `*_output.pdf`, re-renders, clears the variant's grades, and re-locks the deck as
 misaligned so the annotator can re-align. (The backup can also be restored by hand.)
 
-Alignment is **per-variant**: editing `ideal_output.pdf` aligns `ideal`;
-`current_output.pdf` aligns `current`. The shared `input.pdf` is never touched.
+Alignment is **per-variant**: editing `ideal_output.pdf` aligns `ideal`,
+`current_output.pdf` aligns `current`, and `programmatic_output.pdf` aligns
+`programmatic`. The shared `input.pdf` is never touched.
 
 ## Filesystem & data-model changes
 

@@ -1,13 +1,13 @@
 """Run gamma's import-evals VLM graders against rendered slide pairs.
 
 Flow: for a (deck, variant, pair) we read the matching grader's ``prompt.md`` +
-``grader.yml`` from ``packages/import-evals/graders``, then POST the rubric, the
-model, and the two rendered-PNG URLs to the local eval-server
-(``yarn dev:eval-server``). The eval-server fetches the PNGs over localhost,
-base64-encodes them, and runs the prompt against claude through gamma's model
-gateway. We parse the ``pass | borderline | fail`` verdict + explanation from the
-response and store it per (deck, variant, pair, mode) in the shared ``ai_grades/``
-folder — in its own file so it never collides with the human autosave.
+``grader.yml`` from the vendored ``backend/graders/`` dir, then grade the pair
+IN-PROCESS via :mod:`app.llm` — it reads the two rendered PNGs off disk,
+base64-encodes them, and calls Anthropic's Messages API directly (no gamma
+monorepo or eval-server). We parse the ``pass | borderline | fail`` verdict +
+explanation from the response and store it per (deck, variant, pair, mode) in the
+shared ``ai_grades/`` folder — in its own file so it never collides with the
+human autosave.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from .modes import MODE_BY_ID, MODE_GRADERS, PAIR_MODE_IDS
 
 
 class AIGraderError(RuntimeError):
-    """Configuration or transport error talking to the eval-server / graders dir."""
+    """Configuration or transport error talking to Anthropic / the graders dir."""
 
 
 def _now() -> str:
@@ -227,7 +227,7 @@ def _save_ai_grades(slug: str, variant: str, data: Dict) -> None:
 
 
 def get_ai_grades(slug: str, variant: str) -> Dict:
-    """Public read for the UI overlay (no eval-server contact)."""
+    """Public read for the UI overlay (no model call)."""
     return load_ai_grades(slug, variant)
 
 

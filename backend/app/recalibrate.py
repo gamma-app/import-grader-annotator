@@ -1,7 +1,7 @@
 """Grader recalibration: optimize a VLM grader's prompt from human labels.
 
 For one pair-level failure mode we pool every human-labeled slide pair (across all
-decks and both variants), split it train/validation/test, score the current prompt
+decks and all variants), split it train/validation/test, score the current prompt
 (baseline), then generate N independent candidate prompts. Each candidate is one
 vision call that returns ``{themes, summary, prompt}`` — a root-cause diagnosis of
 the training disagreements, a brief plain-language description of what the rewrite

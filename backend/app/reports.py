@@ -4,7 +4,7 @@ Read-only. For one (mode, variant) we join the human annotation store with the
 AI-grades store across every deck, keeping only slide pairs that have BOTH a
 human grade and an AI verdict in {pass, borderline, fail, na}. Everything else
 (ungraded / missing / error / skip) is excluded but counted for context.
-Never contacts the eval-server and never triggers a render.
+Never calls the model (Anthropic) and never triggers a render.
 """
 from __future__ import annotations
 

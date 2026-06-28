@@ -37,9 +37,11 @@ RENDER_CACHE_DIR = Path(
 # Rendered slide width in pixels (height scales to preserve aspect ratio).
 RENDER_WIDTH = int(os.environ.get("SLIDE_GRADER_RENDER_WIDTH", "1600"))
 
-# --- VLM grader integration (gamma packages/import-evals via eval-server) ---
-# Local eval-server (`yarn dev:eval-server` in the gamma monorepo) that runs a
-# grader prompt against claude through gamma's model gateway.
+# --- VLM grader integration (gamma's import-evals graders, run in-process) ---
+# Grading runs IN-PROCESS via app/llm.py, which reads the rendered PNGs and calls
+# Anthropic's Messages API directly (see the ANTHROPIC_* settings below).
+# EVAL_SERVER_URL is legacy/unused — grading no longer routes through gamma's
+# eval-server — and is kept only for backward compatibility with older .env files.
 EVAL_SERVER_URL = (os.environ.get("EVAL_SERVER_URL") or "http://127.0.0.1:5190").rstrip("/")
 # Graders are vendored under backend/graders/ (prompt.md + grader.yml). The env
 # var can still repoint elsewhere (e.g. a gamma checkout); default is the
@@ -62,7 +64,8 @@ ANTHROPIC_VERSION = os.environ.get("ANTHROPIC_VERSION") or "2023-06-01"
 AI_GRADER_MAX_TOKENS = int(os.environ.get("AI_GRADER_MAX_TOKENS", "1024"))
 # Parallel grader requests for deck / all-decks runs (matches the suite default).
 AI_GRADER_CONCURRENCY = int(os.environ.get("AI_GRADER_CONCURRENCY", "3"))
-# Base URL the eval-server uses to fetch this app's rendered PNGs (same machine).
+# Legacy/unused: the base URL the old eval-server used to fetch this app's rendered
+# PNGs. In-process grading reads PNGs straight off disk, so this is ignored now.
 SELF_BASE_URL = (os.environ.get("SLIDE_GRADER_SELF_URL") or "http://127.0.0.1:8000").rstrip("/")
 
 # --- Grader recalibration (optimize a grader prompt from human labels) ---

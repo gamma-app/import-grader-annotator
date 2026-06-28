@@ -46,19 +46,19 @@ The existing grading UI conflates two activities. Recalibration only touches the
 ## The recalibration flow
 
 1. **Gather data for the chosen mode.** Pull *all* existing human annotations
-   (`grade` + `note`) for that mode, across **all decks and both variants** — the grader is
-   variant-agnostic (it just sees an input/output image pair), so `ideal` and `current`
-   labels are both valid data. Join each with the grader's **current output**
+   (`grade` + `note`) for that mode, across **all decks and all variants** — the grader is
+   variant-agnostic (it just sees an input/output image pair), so `ideal`, `current`, and
+   `programmatic` labels are all valid data. Join each with the grader's **current output**
    (`verdict` + `reason`) from the AI-grades store, keeping only pairs that have **both** a
    human grade and an AI verdict in {pass, borderline, fail, na}. This is the join + scoring
-   already implemented in `reports.py` (`mode_report`), generalized to **pool both variants**
+   already implemented in `reports.py` (`mode_report`), generalized to **pool all variants**
    instead of one.
 2. **Split — train / validation / test.** Shuffle the pooled rows with a stored **seed** and
    split **per slide-pair, fully random** (default **60 / 20 / 20**). Persist the split (the
    exact pair ids per bucket) with the run so before/after is reproducible. *Train* feeds the
    optimizer; *validation* selects the winner; *test* is the honest, report-only read.
    - *Known v1 limitation:* a per-pair random split can place near-identical slides from the
-     same deck — or the two variants of the same source slide — in different buckets, so the
+     same deck — or different variants of the same source slide — in different buckets, so the
      **test number may be optimistic**. Deck-grouped splitting is deferred (see below).
 3. **Baseline.** Score the current prompt's agreement (κ + %) on train / validation / test
    from the joined verdicts. Where a cached AI verdict's `prompt_hash` still matches the live
@@ -145,7 +145,7 @@ before/after reported to the human.
 
 - `backend/app/reports.py` — `mode_report(mode_id, variant)` already joins human + AI grades
   and emits agreement %, κ, the confusion matrix, and a structured **disagreements** list
-  (with image paths, grade+note, verdict+reason). Generalize it to **pool both variants** to
+  (with image paths, grade+note, verdict+reason). Generalize it to **pool all variants** to
   build the dataset and to score baseline / candidates.
 - `backend/app/llm.py`
   - `run_grader(rubric, model, input_path, output_path, temperature=0.0)` — runs a prompt

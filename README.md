@@ -4,13 +4,14 @@ A local tool for manually annotating PPTX→Gamma import quality. It shows each
 **input slide** (original deck) next to its **output slide** and lets you (or a teammate)
 grade + note each of the 24 import failure modes from the *Import Evals Taxonomy (PSSL)*.
 
-Each deck has **two output variants**, surfaced as two pages via the header switcher:
+Each deck has **three output variants**, surfaced as pages via the header switcher:
 
 - **Deck Doctor** — `input` vs `ideal_output.pdf` (the hand-crafted ideal Gamma)
 - **Current Import** — `input` vs `current_output.pdf` (the live import flow)
+- **Programmatic Import** — `input` vs `programmatic_output.pdf` (the programmatic import flow)
 
 Grades are **independent per variant** (including a per-deck `#18`), so you can compare
-the ideal target against what the current importer actually produces.
+the ideal target against what the current and programmatic importers actually produce.
 
 - **23 modes graded per slide pair**, **#18 (brand color) graded once per deck**
 - Grades: **Pass / Borderline / Fail** (+ free-text note), defaulting to *ungraded*
@@ -103,9 +104,10 @@ Stage one folder per deck under `data/decks/`:
 
 ```
 data/decks/<slug>/
-    input.pdf            # original deck      (export the Google Drive link to PDF)
-    ideal_output.pdf     # Deck Doctor Gamma   (the "ideal" target)
-    current_output.pdf   # current-import Gamma (the live import flow)
+    input.pdf                # original deck (export the Google Drive link to PDF)
+    ideal_output.pdf         # Deck Doctor Gamma — the "ideal" target
+    current_output.pdf       # current-import Gamma — the live import flow
+    programmatic_output.pdf  # programmatic-import Gamma — the programmatic flow
 ```
 
 - `<slug>` is the folder name (e.g. `deck-01-sales-pitch`).
@@ -157,10 +159,10 @@ exception: they live in a **local** cache, never in the data dir.
 
 | What | Where |
 |---|---|
-| Source PDFs (you add) | `<data>/decks/<slug>/input.pdf`, `ideal_output.pdf`, `current_output.pdf` |
+| Source PDFs (you add) | `<data>/decks/<slug>/input.pdf`, `ideal_output.pdf`, `current_output.pdf`, `programmatic_output.pdf` |
 | Annotations (autosaved) | `<data>/annotations/<slug>.json` (per-variant, schema v2) |
 | Exports | `<data>/exports/consolidated.json`, `tidy.csv` |
-| Rendered PNGs (auto, **local**) | `.cache/renders/<slug>/{input,ideal,current}/` (`SLIDE_GRADER_CACHE`) |
+| Rendered PNGs (auto, **local**) | `.cache/renders/<slug>/{input,ideal,current,programmatic}/` (`SLIDE_GRADER_CACHE`) |
 
 ## Export
 
@@ -211,7 +213,7 @@ Drive may create a "conflicted copy" of that one `<slug>.json`. Dividing decks a
 `GET /api/decks/{slug}/{variant}` · `PUT /api/decks/{slug}/{variant}/pairs/{index}` ·
 `PUT /api/decks/{slug}/{variant}/deck-level` · `POST /api/decks/{slug}/{variant}/align` ·
 `POST /api/decks/{slug}/{variant}/align/reset` · `POST /api/export` ·
-images served at `/images/<slug>/{input|ideal|current}/...` (`{variant}` is `ideal` or `current`)
+images served at `/images/<slug>/{input|ideal|current|programmatic}/...` (`{variant}` is `ideal`, `current`, or `programmatic`)
 
 ## Design docs
 

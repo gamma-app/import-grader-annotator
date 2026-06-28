@@ -12,9 +12,10 @@ Optionally a VLM ("AI") grader produces verdicts that are compared against the h
 in agreement **reports**. Data is shared across the team via one Google Drive folder — there
 is no hosted server.
 
-Every deck has two output **variants**, graded independently:
+Every deck has three output **variants**, graded independently:
 - `ideal` → label **"Deck Doctor"** (`ideal_output.pdf`)
 - `current` → label **"Current Import"** (`current_output.pdf`)
+- `programmatic` → label **"Programmatic Import"** (`programmatic_output.pdf`)
 
 ## TL;DR dev loop (READ THIS FIRST)
 - One-time setup: `./setup.sh` (creates `backend/.venv`, pip installs, `npm install`,
@@ -75,8 +76,8 @@ The API client is a thin `fetch` wrapper.
 - **Failure modes:** 24, in `modes.py`. 22 have a VLM grader (`MODE_GRADERS`); #18 (deck-level
   brand color) and #21 (cross-slide) have none. Fields: `id, name, element, dimension,
   severity, level` where `level` ∈ {`pair`, `deck`}.
-- **Variants:** `ideal` / `current` (`config.VARIANTS`). Almost everything is keyed by
-  `(slug, variant)`.
+- **Variants:** `ideal` / `current` / `programmatic` (`config.VARIANTS`). Almost everything is
+  keyed by `(slug, variant)`.
 - **Human grades:** `ungraded | pass | borderline | fail` (+ free-text note).
   **AI verdicts:** `pass | borderline | fail | na`.
 - **AI grader (optional):** reads vendored grader prompts from `backend/graders/` (override
@@ -89,12 +90,12 @@ The API client is a thin `fetch` wrapper.
 ## Data & storage (under `SLIDE_GRADER_DATA`, default `./data`)
 | What | Where |
 |---|---|
-| Source PDFs (added by hand) | `<data>/decks/<slug>/{input,ideal_output,current_output}.pdf` |
+| Source PDFs (added by hand) | `<data>/decks/<slug>/{input,ideal_output,current_output,programmatic_output}.pdf` |
 | Human annotations (autosaved) | `<data>/annotations/<slug>.json` (per-variant, schema v2) |
 | AI grades | `<data>/ai_grades/<slug>__<variant>.json` |
 | Mode descriptions | `<data>/mode_descriptions.json` |
 | Exports | `<data>/exports/{consolidated.json,tidy.csv}` |
-| Rendered PNGs (**local cache, never synced**) | `.cache/renders/<slug>/{input,ideal,current}/NNN.png` → served at `/images/...` |
+| Rendered PNGs (**local cache, never synced**) | `.cache/renders/<slug>/{input,ideal,current,programmatic}/NNN.png` → served at `/images/...` |
 
 Persistence pattern: read-modify-write JSON under a per-deck `RLock`, written atomically
 (`tempfile` + `os.replace`). One file per deck; Drive is last-write-wins (the team "divides

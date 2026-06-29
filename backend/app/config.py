@@ -20,8 +20,13 @@ AI_GRADES_DIR = DATA_DIR / "ai_grades"
 RECALIBRATIONS_DIR = DATA_DIR / "recalibrations"
 
 # Human-authored, editable descriptions for each failure mode (shared like
-# annotations). Keyed by mode id; the taxonomy itself lives in modes.py.
+# annotations). Keyed by mode id; the taxonomy itself lives in modes.json.
 MODE_DESCRIPTIONS_PATH = DATA_DIR / "mode_descriptions.json"
+
+# The editable failure-mode registry (taxonomy). Seeded from modes.DEFAULT_* on
+# first access and shared like annotations, so add/remove/edit syncs to the team
+# via Drive without a code change or restart. See app/modes.py.
+MODES_PATH = DATA_DIR / "modes.json"
 
 # NOTE: regenerated VLM grader prompts are NOT stored here. They are the single
 # source of truth in git at backend/graders/<name>/prompt.md, rewritten in place

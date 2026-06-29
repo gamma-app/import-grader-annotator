@@ -2,7 +2,8 @@
 
 A local tool for manually annotating PPTX→Gamma import quality. It shows each
 **input slide** (original deck) next to its **output slide** and lets you (or a teammate)
-grade + note each of the 24 import failure modes from the *Import Evals Taxonomy (PSSL)*.
+grade + note each import failure mode from the *Import Evals Taxonomy (PSSL)* — a built-in set of
+**24** that you can edit, extend, disable, or delete in-app.
 
 Each deck has **three output variants**, surfaced as pages via the header switcher:
 
@@ -18,6 +19,7 @@ the ideal target against what the current and programmatic importers actually pr
 - Synchronized side-by-side **zoom/pan** viewer
 - **Autosave**, auto-resume, and per-variant progress tracking
 - **Failure-mode filter** — focus the grading rail on a chosen subset of modes (quick toggles by severity/element). It's view-only and resets on reload, so it never affects grades, progress, or exports.
+- **Editable failure-mode directory** — add, edit, enable/disable, or delete modes (including the built-in 24), write per-mode descriptions, and generate a VLM grader for a mode that doesn't have one yet. The taxonomy is stored in `modes.json` in the shared folder, so edits sync to the team (disabling keeps past grades; deleting is only allowed when a mode has no stored data).
 - Exports a **consolidated JSON** + a **tidy/long CSV** (with a `variant` column)
 
 ## Team Setup (for teammates)
@@ -198,6 +200,7 @@ exception: they live in a **local** cache, never in the data dir.
 |---|---|
 | Source PDFs (you add) | `<data>/decks/<slug>/input.pdf`, `ideal_output.pdf`, `current_output.pdf`, `programmatic_output.pdf` |
 | Annotations (autosaved) | `<data>/annotations/<slug>.json` (per-variant, schema v2) |
+| Failure-mode registry + descriptions | `<data>/modes.json`, `<data>/mode_descriptions.json` (shared, last-write-wins) |
 | Exports | `<data>/exports/consolidated.json`, `tidy.csv` |
 | Rendered PNGs (auto, **local**) | `.cache/renders/<slug>/{input,ideal,current,programmatic}/` (`SLIDE_GRADER_CACHE`) |
 
@@ -246,10 +249,12 @@ Drive may create a "conflicted copy" of that one `<slug>.json`. Dividing decks a
 
 ## API
 
-`GET /api/modes` · `GET /api/decks` · `POST /api/rescan` ·
+`GET /api/modes` · `GET /api/mode-directory` · `GET /api/decks` · `POST /api/rescan` ·
 `GET /api/decks/{slug}/{variant}` · `PUT /api/decks/{slug}/{variant}/pairs/{index}` ·
 `PUT /api/decks/{slug}/{variant}/deck-level` · `POST /api/decks/{slug}/{variant}/align` ·
-`POST /api/decks/{slug}/{variant}/align/reset` · `POST /api/export` ·
+`POST /api/decks/{slug}/{variant}/align/reset` ·
+`POST /api/modes` · `PATCH /api/modes/{id}` · `DELETE /api/modes/{id}` (edit the registry) ·
+`POST /api/export` ·
 images served at `/images/<slug>/{input|ideal|current|programmatic}/...` (`{variant}` is `ideal`, `current`, or `programmatic`)
 
 ## Design docs

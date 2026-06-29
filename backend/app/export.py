@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from . import config, storage
-from .modes import MODE_BY_ID, MODES
+from . import modes as registry
 
 TIDY_COLUMNS = [
     "deck_slug",
@@ -54,7 +54,7 @@ def _tidy_rows(decks: List[Dict]) -> List[Dict]:
             vlabel = VARIANT_LABEL.get(vkey, vkey)
 
             for mid_str, cell in variant.get("deck_level", {}).items():
-                mode = MODE_BY_ID.get(int(mid_str), {})
+                mode = registry.mode_by_id(int(mid_str)) or {}
                 rows.append(
                     {
                         "deck_slug": slug,
@@ -79,7 +79,7 @@ def _tidy_rows(decks: List[Dict]) -> List[Dict]:
 
             for pair in variant.get("pairs", []):
                 for mid_str, cell in pair.get("modes", {}).items():
-                    mode = MODE_BY_ID.get(int(mid_str), {})
+                    mode = registry.mode_by_id(int(mid_str)) or {}
                     rows.append(
                         {
                             "deck_slug": slug,
@@ -110,7 +110,7 @@ def run_export() -> Dict:
     generated_at = datetime.now(timezone.utc).isoformat()
 
     json_path = config.EXPORTS_DIR / "consolidated.json"
-    payload = {"generated_at": generated_at, "modes": MODES, "decks": decks}
+    payload = {"generated_at": generated_at, "modes": registry.all_modes(), "decks": decks}
     with json_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 

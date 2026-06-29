@@ -31,6 +31,13 @@ export default function App() {
     setTimeout(() => setToast(null), 4500)
   }
 
+  // Re-pull the enabled modes + grader map after the directory edits the registry,
+  // so the grading rail / reports reflect adds, edits, and enable/disable without a reload.
+  const refreshModes = () =>
+    api.getModes().then(setModes).catch(() => {
+      /* keep the last good registry; the directory surfaces its own errors */
+    })
+
   const onExport = async () => {
     setExporting(true)
     try {
@@ -166,7 +173,13 @@ export default function App() {
           />
         )}
         {view.name === 'directory' && (
-          <ModeDirectory showToast={showToast} onBack={() => setView({ name: 'dashboard' })} />
+          <ModeDirectory
+            showToast={showToast}
+            onBack={() => {
+              refreshModes()
+              setView({ name: 'dashboard' })
+            }}
+          />
         )}
       </main>
 

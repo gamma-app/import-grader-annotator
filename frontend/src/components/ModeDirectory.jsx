@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, BookOpen, Loader2, Search, Copy, Check, AlertTriangle, Sparkles, RefreshCw, GitBranch, UploadCloud, Wand2, PlayCircle, ClipboardCheck, X } from 'lucide-react'
+import { ArrowLeft, BookOpen, Loader2, Search, Copy, Check, AlertTriangle, Sparkles, RefreshCw, GitBranch, UploadCloud, Wand2, PlayCircle, ClipboardCheck, Plus, Pencil, Trash2, Power, X } from 'lucide-react'
 import { api } from '../api'
 import RecalibratePanel from './RecalibratePanel.jsx'
 
@@ -8,6 +8,14 @@ const SEV = {
   P1: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
   P2: 'bg-slate-600/30 text-slate-300 border-slate-600/40',
 }
+
+// Editable-mode form scaffolding (create + edit modals).
+const EMPTY_FORM = { name: '', element: '', dimension: '', severity: 'P2', level: 'pair' }
+const SEVERITIES = ['P0', 'P1', 'P2']
+const LEVELS = [
+  ['pair', 'Per-pair'],
+  ['deck', 'Deck-level'],
+]
 
 function Badge({ children, className = '' }) {
   return <span className={`text-[11px] px-1.5 py-0.5 rounded border ${className}`}>{children}</span>
@@ -100,6 +108,58 @@ function PromptBlock({ mode }) {
   )
 }
 
+// Shared field inputs for the New-mode and Edit-mode modals.
+function ModeFormFields({ form, setForm, elementOptions }) {
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+  const cls =
+    'w-full bg-slate-800/60 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500'
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-xs text-slate-400">Name</label>
+        <input className={cls} value={form.name} onChange={set('name')} placeholder="e.g. Footnotes dropped" />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-slate-400">Element group</label>
+          <input className={cls} list="md-elements" value={form.element} onChange={set('element')} placeholder="e.g. Images" />
+          <datalist id="md-elements">
+            {(elementOptions || []).map((e) => (
+              <option key={e} value={e} />
+            ))}
+          </datalist>
+        </div>
+        <div>
+          <label className="text-xs text-slate-400">Dimension</label>
+          <input className={cls} value={form.dimension} onChange={set('dimension')} placeholder="e.g. Presence" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-slate-400">Severity</label>
+          <select className={cls} value={form.severity} onChange={set('severity')}>
+            {SEVERITIES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs text-slate-400">Level</label>
+          <select className={cls} value={form.level} onChange={set('level')}>
+            {LEVELS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ModeDirectory({ onBack, showToast }) {
   const [data, setData] = useState(null)
   const [elementOrder, setElementOrder] = useState([])
@@ -123,6 +183,16 @@ export default function ModeDirectory({ onBack, showToast }) {
   const [aiJob, setAiJob] = useState(null) // active/last bulk AI grading job (global, single-slot)
   const aiPoll = useRef(null)
   const selectedIdRef = useRef(selectedId)
+  // Registry editing (create / edit fields / enable-disable / delete).
+  const [newOpen, setNewOpen] = useState(false)
+  const [newForm, setNewForm] = useState(EMPTY_FORM)
+  const [createBusy, setCreateBusy] = useState(false)
+  const [edit, setEdit] = useState({ open: false, mode: null })
+  const [editForm, setEditForm] = useState(EMPTY_FORM)
+  const [editBusy, setEditBusy] = useState(false)
+  const [toggleBusy, setToggleBusy] = useState(false)
+  const [del, setDel] = useState({ open: false, mode: null })
+  const [delBusy, setDelBusy] = useState(false)
 
   useEffect(() => {
     api
@@ -216,14 +286,16 @@ export default function ModeDirectory({ onBack, showToast }) {
         d
           ? d.map((m) =>
               m.id === mode.id
-                ? { ...m, prompt: r.prompt, model: r.model, uncommitted: true, prompt_status: 'ok' }
+                ? { ...m, grader_name: r.grader_name, prompt: r.prompt, model: r.model, uncommitted: true, prompt_status: 'ok' }
                 : m,
             )
           : d,
       )
       showToast?.({
         type: 'success',
-        msg: `Regenerated #${mode.id} grader · cleared ${r.cleared} AI score${r.cleared === 1 ? '' : 's'}`,
+        msg: r.created
+          ? `Created grader "${r.grader_name}" for #${mode.id} — review & push`
+          : `Regenerated #${mode.id} grader · cleared ${r.cleared} AI score${r.cleared === 1 ? '' : 's'}`,
       })
       setReinit({ open: false, mode: null, count: 0 })
     } catch (e) {
@@ -507,6 +579,96 @@ export default function ModeDirectory({ onBack, showToast }) {
     }
   }
 
+  // ----- registry CRUD
+  const doCreate = async () => {
+    if (!newForm.name.trim() || !newForm.element.trim()) {
+      showToast?.({ type: 'error', msg: 'Name and element are required' })
+      return
+    }
+    setCreateBusy(true)
+    try {
+      const created = await api.createMode(newForm)
+      // Re-fetch so the new row carries the directory-enriched fields (prompt_status, etc.).
+      const r = await api.getModeDirectory()
+      setData(r.modes)
+      setElementOrder(r.element_order || [])
+      setSelectedId(created.id)
+      setNewOpen(false)
+      setNewForm(EMPTY_FORM)
+      showToast?.({ type: 'success', msg: `Added #${created.id} ${created.name}` })
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    } finally {
+      setCreateBusy(false)
+    }
+  }
+
+  const openEdit = (mode) => {
+    setEditForm({
+      name: mode.name,
+      element: mode.element,
+      dimension: mode.dimension || '',
+      severity: mode.severity || 'P2',
+      level: mode.level || 'pair',
+    })
+    setEdit({ open: true, mode })
+  }
+
+  const saveEdit = async () => {
+    const mode = edit.mode
+    if (!mode) return
+    if (!editForm.name.trim() || !editForm.element.trim()) {
+      showToast?.({ type: 'error', msg: 'Name and element are required' })
+      return
+    }
+    setEditBusy(true)
+    try {
+      const updated = await api.updateMode(mode.id, editForm)
+      setData((d) => (d ? d.map((m) => (m.id === mode.id ? { ...m, ...updated } : m)) : d))
+      if (updated.element && !elementOrder.includes(updated.element)) {
+        setElementOrder((eo) => [...eo, updated.element])
+      }
+      setEdit({ open: false, mode: null })
+      showToast?.({ type: 'success', msg: `Updated #${mode.id}` })
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    } finally {
+      setEditBusy(false)
+    }
+  }
+
+  const toggleEnabled = async (mode) => {
+    if (!mode) return
+    setToggleBusy(true)
+    try {
+      const updated = await api.updateMode(mode.id, { enabled: !mode.enabled })
+      setData((d) => (d ? d.map((m) => (m.id === mode.id ? { ...m, ...updated } : m)) : d))
+      showToast?.({ type: 'success', msg: `${updated.enabled ? 'Enabled' : 'Disabled'} #${mode.id}` })
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    } finally {
+      setToggleBusy(false)
+    }
+  }
+
+  const doDelete = async () => {
+    const mode = del.mode
+    if (!mode) return
+    setDelBusy(true)
+    try {
+      await api.deleteMode(mode.id)
+      const rest = (data || []).filter((m) => m.id !== mode.id)
+      setData(rest)
+      setSelectedId((cur) => (cur === mode.id ? (rest[0] ? rest[0].id : null) : cur))
+      setDel({ open: false, mode: null })
+      showToast?.({ type: 'success', msg: `Deleted #${mode.id} ${mode.name}` })
+    } catch (e) {
+      showToast?.({ type: 'error', msg: String(e) })
+    } finally {
+      setDelBusy(false)
+    }
+  }
+
   const textFor = (m) => (drafts[m.id] !== undefined ? drafts[m.id] : m.description || '')
 
   const filtered = useMemo(() => {
@@ -562,6 +724,15 @@ export default function ModeDirectory({ onBack, showToast }) {
         <h1 className="font-semibold text-slate-100">Failure Mode Directory</h1>
         <span className="text-xs text-slate-500">{data.length} modes</span>
         <div className="flex-1" />
+        <button
+          onClick={() => {
+            setNewForm(EMPTY_FORM)
+            setNewOpen(true)
+          }}
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-indigo-600/60 text-indigo-200 hover:bg-indigo-600/15"
+        >
+          <Plus size={14} /> New mode
+        </button>
         {git?.is_repo && (
           <div
             className="flex items-center gap-1.5 text-xs text-slate-400"
@@ -605,13 +776,14 @@ export default function ModeDirectory({ onBack, showToast }) {
                       onClick={() => select(m.id)}
                       className={`w-full text-left px-2 py-1.5 rounded-md mb-0.5 flex items-center gap-2 border ${
                         active ? 'bg-indigo-600/20 border-indigo-600/40' : 'border-transparent hover:bg-slate-800'
-                      }`}
+                      } ${m.enabled ? '' : 'opacity-50'}`}
                     >
                       <span className="text-[11px] text-slate-500 w-5 shrink-0 text-right">{m.id}</span>
                       <span className="text-sm text-slate-200 truncate flex-1">{m.name}</span>
                       {hasDesc && (
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" title="Has a description" />
                       )}
+                      {!m.enabled && <span className="text-[10px] text-rose-400 shrink-0">off</span>}
                       {!m.grader_name && <span className="text-[10px] text-slate-500 shrink-0">no AI</span>}
                     </button>
                   )
@@ -632,14 +804,45 @@ export default function ModeDirectory({ onBack, showToast }) {
                 <span className="text-slate-500 font-normal mr-2">#{selected.id}</span>
                 {selected.name}
               </h2>
-              <div className="flex flex-wrap items-center gap-1.5 mt-2 mb-6">
+              <div className="flex flex-wrap items-center gap-1.5 mt-2 mb-3">
                 <Badge className="bg-slate-700/40 text-slate-300 border-slate-600/40">{selected.element}</Badge>
-                <Badge className="bg-slate-700/40 text-slate-300 border-slate-600/40">{selected.dimension}</Badge>
+                {selected.dimension && (
+                  <Badge className="bg-slate-700/40 text-slate-300 border-slate-600/40">{selected.dimension}</Badge>
+                )}
                 <Badge className={SEV[selected.severity] || SEV.P2}>{selected.severity}</Badge>
                 <Badge className="bg-slate-700/40 text-slate-400 border-slate-600/40">
                   {selected.level === 'deck' ? 'deck-level' : 'per-pair'}
                 </Badge>
+                {!selected.builtin && (
+                  <Badge className="bg-indigo-500/15 text-indigo-300 border-indigo-500/30">custom</Badge>
+                )}
+                {!selected.enabled && (
+                  <Badge className="bg-rose-500/15 text-rose-300 border-rose-500/30">disabled</Badge>
+                )}
                 {selected.aka && <span className="text-xs text-slate-500">· {selected.aka}</span>}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 mb-6">
+                <button
+                  onClick={() => openEdit(selected)}
+                  className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
+                >
+                  <Pencil size={13} /> Edit fields
+                </button>
+                <button
+                  onClick={() => toggleEnabled(selected)}
+                  disabled={toggleBusy}
+                  className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+                >
+                  {toggleBusy ? <Loader2 size={13} className="animate-spin" /> : <Power size={13} />}
+                  {selected.enabled ? 'Disable' : 'Enable'}
+                </button>
+                <button
+                  onClick={() => setDel({ open: true, mode: selected })}
+                  className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-rose-700/60 text-rose-300 hover:bg-rose-600/15"
+                >
+                  <Trash2 size={13} /> Delete
+                </button>
               </div>
 
               <div className="mb-6">
@@ -727,6 +930,23 @@ export default function ModeDirectory({ onBack, showToast }) {
                       </button>
                     </div>
                   )}
+                  {!selected.grader_name && selected.level === 'pair' && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => openReinit(selected)}
+                        disabled={!(textFor(selected) || '').trim() || reinitBusy}
+                        title={
+                          (textFor(selected) || '').trim()
+                            ? 'Author a VLM grader for this mode from its description'
+                            : 'Write a description first'
+                        }
+                        className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-indigo-600/60 text-indigo-200 hover:bg-indigo-600/15 disabled:opacity-40"
+                      >
+                        {reinitBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                        Generate AI grader
+                      </button>
+                    </div>
+                  )}
                 </div>
                 {recalForSelected && (
                   <div className="mb-2 rounded-lg border border-fuchsia-700/50 bg-fuchsia-950/20 p-2.5">
@@ -809,20 +1029,46 @@ export default function ModeDirectory({ onBack, showToast }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2 mb-2 text-slate-100 font-semibold">
-              <AlertTriangle size={16} className="text-amber-400" /> Reinitialize grader prompt
+              {reinit.mode?.grader_name ? (
+                <>
+                  <AlertTriangle size={16} className="text-amber-400" /> Reinitialize grader prompt
+                </>
+              ) : (
+                <>
+                  <Sparkles size={16} className="text-indigo-400" /> Generate VLM grader
+                </>
+              )}
             </div>
-            <p className="text-sm text-slate-300 mb-3">
-              This rewrites the{' '}
-              <span className="font-medium text-slate-100">
-                #{reinit.mode?.id} {reinit.mode?.name}
-              </span>{' '}
-              grader prompt from its current description, and{' '}
-              <span className="text-rose-300 font-medium">
-                deletes all {reinit.count} AI score{reinit.count === 1 ? '' : 's'}
-              </span>{' '}
-              this grader has produced across all decks. They&rsquo;ll need to be re-run.
-            </p>
-            <p className="text-xs text-slate-500 mb-4">Human grades are not affected.</p>
+            {reinit.mode?.grader_name ? (
+              <>
+                <p className="text-sm text-slate-300 mb-3">
+                  This rewrites the{' '}
+                  <span className="font-medium text-slate-100">
+                    #{reinit.mode?.id} {reinit.mode?.name}
+                  </span>{' '}
+                  grader prompt from its current description, and{' '}
+                  <span className="text-rose-300 font-medium">
+                    deletes all {reinit.count} AI score{reinit.count === 1 ? '' : 's'}
+                  </span>{' '}
+                  this grader has produced across all decks. They&rsquo;ll need to be re-run.
+                </p>
+                <p className="text-xs text-slate-500 mb-4">Human grades are not affected.</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-slate-300 mb-3">
+                  This authors a new VLM grader for{' '}
+                  <span className="font-medium text-slate-100">
+                    #{reinit.mode?.id} {reinit.mode?.name}
+                  </span>{' '}
+                  from its description and attaches it to the mode. The prompt is left{' '}
+                  <span className="text-amber-300 font-medium">uncommitted</span> for you to review and push.
+                </p>
+                <p className="text-xs text-slate-500 mb-4">
+                  You can grade with it right away; commit &amp; push to share it with the team.
+                </p>
+              </>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setReinit({ open: false, mode: null, count: 0 })}
@@ -840,8 +1086,10 @@ export default function ModeDirectory({ onBack, showToast }) {
                   <>
                     <Loader2 size={14} className="animate-spin" /> Generating…
                   </>
-                ) : (
+                ) : reinit.mode?.grader_name ? (
                   'Reinitialize'
+                ) : (
+                  'Generate grader'
                 )}
               </button>
             </div>
@@ -953,6 +1201,136 @@ export default function ModeDirectory({ onBack, showToast }) {
           onAdopt={doAdopt}
           onReject={doReject}
         />
+      )}
+
+      {newOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !createBusy && setNewOpen(false)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-3 text-slate-100 font-semibold">
+              <Plus size={16} className="text-indigo-400" /> New failure mode
+            </div>
+            <ModeFormFields form={newForm} setForm={setNewForm} elementOptions={elementOrder} />
+            <p className="text-xs text-slate-500 mt-3">
+              A new mode starts with no VLM grader. Add a description, then generate one.
+            </p>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setNewOpen(false)}
+                disabled={createBusy}
+                className="text-sm px-3 py-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doCreate}
+                disabled={createBusy || !newForm.name.trim() || !newForm.element.trim()}
+                className="text-sm px-3 py-1.5 rounded border border-indigo-600 bg-indigo-600/20 text-indigo-100 hover:bg-indigo-600/30 disabled:opacity-40 flex items-center gap-1.5"
+              >
+                {createBusy ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" /> Adding…
+                  </>
+                ) : (
+                  'Add mode'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {edit.open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !editBusy && setEdit({ open: false, mode: null })}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-3 text-slate-100 font-semibold">
+              <Pencil size={16} className="text-indigo-400" /> Edit #{edit.mode?.id}
+            </div>
+            <ModeFormFields form={editForm} setForm={setEditForm} elementOptions={elementOrder} />
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setEdit({ open: false, mode: null })}
+                disabled={editBusy}
+                className="text-sm px-3 py-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={editBusy || !editForm.name.trim() || !editForm.element.trim()}
+                className="text-sm px-3 py-1.5 rounded border border-indigo-600 bg-indigo-600/20 text-indigo-100 hover:bg-indigo-600/30 disabled:opacity-40 flex items-center gap-1.5"
+              >
+                {editBusy ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" /> Saving…
+                  </>
+                ) : (
+                  'Save changes'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {del.open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !delBusy && setDel({ open: false, mode: null })}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-2 text-slate-100 font-semibold">
+              <Trash2 size={16} className="text-rose-400" /> Delete failure mode
+            </div>
+            <p className="text-sm text-slate-300 mb-3">
+              Permanently delete{' '}
+              <span className="font-medium text-slate-100">
+                #{del.mode?.id} {del.mode?.name}
+              </span>
+              ? This can&rsquo;t be undone.
+            </p>
+            <p className="text-xs text-slate-500 mb-4">
+              Modes that already have human grades or AI verdicts can&rsquo;t be deleted — disable them instead. Any grader
+              files on disk are left untouched.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDel({ open: false, mode: null })}
+                disabled={delBusy}
+                className="text-sm px-3 py-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doDelete}
+                disabled={delBusy}
+                className="text-sm px-3 py-1.5 rounded border border-rose-600 bg-rose-600/20 text-rose-100 hover:bg-rose-600/30 disabled:opacity-40 flex items-center gap-1.5"
+              >
+                {delBusy ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" /> Deleting…
+                  </>
+                ) : (
+                  'Delete'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import config, llm, storage
-from .modes import MODE_BY_ID, MODE_GRADERS, PAIR_MODE_IDS
+from . import modes as registry
 
 
 class AIGraderError(RuntimeError):
@@ -99,24 +99,83 @@ def load_grader(grader_name: str) -> Dict:
     return rec
 
 
-def write_grader_prompt(grader_name: str, prompt: str) -> Path:
-    """Rewrite a grader's ``prompt.md`` in place (atomic) and bust the cache.
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
-    This is the single source of truth in git — a reinit writes here, then the
-    user commits + pushes from the tool. Returns the prompt.md path."""
-    gdir = _graders_dir() / grader_name
-    if not gdir.is_dir():
-        raise AIGraderError(f"grader '{grader_name}' dir not found: {gdir}")
-    prompt_path = gdir / "prompt.md"
-    text = prompt.rstrip("\n") + "\n"
-    fd, tmp = tempfile.mkstemp(dir=str(gdir), suffix=".tmp")
+
+def derive_grader_name(mode_name: str, mode_id: int) -> str:
+    """A new, unique grader folder name for a mode, e.g. 'import-bullet-styling'.
+
+    Mirrors the vendored graders' naming. Falls back to the id when the name has
+    no usable characters, and appends the id if the slug would collide with an
+    existing grader dir or another mode's grader."""
+    base = _SLUG_RE.sub("-", (mode_name or "").lower()).strip("-")
+    slug = f"import-{base}" if base else f"import-mode-{mode_id}"
+    used = set(registry.mode_graders().values())
+    if (_graders_dir() / slug).exists() or slug in used:
+        slug = f"{slug}-{mode_id}"
+    return slug
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
-        os.replace(tmp, prompt_path)
+        os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+def _default_grader_yml(name: str, model: str, description: str) -> str:
+    """A minimal grader.yml matching the vendored graders (categorical, two image
+    variables). Used only when seeding a brand-new grader."""
+    desc = " ".join((description or name).split()) or name
+    if len(desc) > 200:
+        desc = desc[:197].rstrip() + "..."
+    return (
+        f"name: {name}\n"
+        "type: model\n"
+        "kind: categorical\n"
+        "description: >\n"
+        f"  {desc}\n"
+        f"model: {model}\n"
+        "promptFile: prompt.md\n"
+        "imageVariables:\n"
+        "  - input_slide\n"
+        "  - output_slide\n"
+        "imageConfig:\n"
+        "  resizeImages: false\n"
+        "categories:\n"
+        "  - pass\n"
+        "  - borderline\n"
+        "  - fail\n"
+        "passCategories:\n"
+        "  - pass\n"
+    )
+
+
+def write_grader_prompt(
+    grader_name: str,
+    prompt: str,
+    *,
+    model: Optional[str] = None,
+    description: str = "",
+) -> Path:
+    """Write a grader's ``prompt.md`` (atomic) and bust the cache. Returns the path.
+
+    For an existing grader this just rewrites prompt.md in place (a reinit/adopt).
+    For a brand-new grader the dir and a default ``grader.yml`` are created first,
+    so the grader becomes immediately loadable. Either way prompt.md is the single
+    source of truth in git; the user then commits + pushes from the tool."""
+    gdir = _graders_dir() / grader_name
+    gdir.mkdir(parents=True, exist_ok=True)
+    yml_path = gdir / "grader.yml"
+    if not yml_path.exists():
+        seed_model = model or config.AI_GRADER_MODEL or "claude-sonnet-4-6"
+        _atomic_write(yml_path, _default_grader_yml(grader_name, seed_model, description))
+    prompt_path = gdir / "prompt.md"
+    _atomic_write(prompt_path, prompt.rstrip("\n") + "\n")
     with _grader_cache_lock:
         _grader_cache.pop(grader_name, None)
     return prompt_path
@@ -275,7 +334,8 @@ def _find_pair(detail: Dict, index: int) -> Optional[Dict]:
 
 def gradeable_pair_modes(modes: Optional[List[int]] = None) -> List[int]:
     """Pair-level mode ids that have a grader, optionally filtered to `modes`."""
-    ids = [m for m in PAIR_MODE_IDS if m in MODE_GRADERS]
+    graders = registry.mode_graders()
+    ids = [m for m in registry.pair_mode_ids() if m in graders]
     if modes is not None:
         wanted = set(modes)
         ids = [m for m in ids if m in wanted]
@@ -295,7 +355,7 @@ def grade_pair_mode(
 ) -> Dict:
     """Grade a single (pair, mode). Skips the model call if a fresh cached result
     exists (same prompt_hash) unless `force`. Returns the stored cell."""
-    grader_name = MODE_GRADERS.get(mode_id)
+    grader_name = registry.grader_name(mode_id)
     if not grader_name:
         raise AIGraderError(f"mode #{mode_id} has no VLM grader")
 
@@ -396,9 +456,10 @@ def status() -> Dict:
     """Config/health for the UI: graders present + Anthropic key configured."""
     graders_dir = config.IMPORT_EVALS_GRADERS_DIR
     dir_ok = bool(graders_dir and graders_dir.is_dir())
+    graders = registry.mode_graders()
     missing: List[str] = []
     if dir_ok:
-        for gname in MODE_GRADERS.values():
+        for gname in graders.values():
             if not (graders_dir / gname / "prompt.md").exists():
                 missing.append(gname)
 
@@ -408,8 +469,8 @@ def status() -> Dict:
         "model": config.AI_GRADER_MODEL or None,
         "graders_dir": str(graders_dir) if graders_dir else None,
         "graders_dir_ok": dir_ok,
-        "graders_expected": len(MODE_GRADERS),
-        "graders_present": len(MODE_GRADERS) - len(missing) if dir_ok else 0,
+        "graders_expected": len(graders),
+        "graders_present": len(graders) - len(missing) if dir_ok else 0,
         "graders_missing": missing,
         # Back-compat alias for any UI still reading the old field name.
         "eval_server_reachable": llm_ok,

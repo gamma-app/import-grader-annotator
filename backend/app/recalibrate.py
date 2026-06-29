@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from . import ai_grader, config, llm, reports, storage
-from .modes import MODE_BY_ID, MODE_GRADERS
+from . import modes as registry
 
 # The comparable verdicts on both sides (human + agent); mirrors reports.py.
 _GRADES = reports._GRADES
@@ -512,7 +512,7 @@ def estimate(mode_id: int) -> Dict:
     """Preview for the confirm dialog: dataset/split sizes + estimated model calls.
 
     Cheap — counts labels and never renders or grades."""
-    grader_name = MODE_GRADERS.get(mode_id)
+    grader_name = registry.grader_name(mode_id)
     if not grader_name:
         return {"eligible": False, "reason": "this mode has no VLM grader",
                 "dataset_size": 0, "min_dataset": config.RECALIBRATE_MIN_DATASET,
@@ -548,9 +548,9 @@ def _run(mode_id: int, *, cancel=None,
          on_tick: Callable[..., None] = _noop,
          on_stage: Callable[[str], None] = _noop) -> Dict:
     """Execute a full recalibration and return the saved run record."""
-    mode = MODE_BY_ID[mode_id]
-    grader_name = MODE_GRADERS.get(mode_id)
-    if not grader_name:
+    mode = registry.mode_by_id(mode_id)
+    grader_name = registry.grader_name(mode_id)
+    if not mode or not grader_name:
         raise RecalibrateError(f"mode #{mode_id} has no VLM grader")
     grader = ai_grader.load_grader(grader_name)
     optimizer_model = config.RECALIBRATE_MODEL or grader["model"]
@@ -842,7 +842,7 @@ def cancel_job(job_id: str) -> Optional[Dict]:
 def start_recalibration(mode_id: int) -> Dict:
     """Start a background recalibration. Only one runs at a time (returns the
     active job unchanged if one is already in flight)."""
-    if mode_id not in MODE_GRADERS:
+    if mode_id not in registry.mode_graders():
         raise RecalibrateError(f"mode #{mode_id} has no VLM grader")
     st = ai_grader.status()
     if not st["llm_configured"]:
@@ -862,8 +862,8 @@ def start_recalibration(mode_id: int) -> Dict:
         job = {
             "id": job_id,
             "mode_id": mode_id,
-            "mode_name": MODE_BY_ID[mode_id]["name"],
-            "grader": MODE_GRADERS[mode_id],
+            "mode_name": (registry.mode_by_id(mode_id) or {}).get("name"),
+            "grader": registry.grader_name(mode_id),
             "status": "running",
             "stage": "starting",
             "message": "starting",

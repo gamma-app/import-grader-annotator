@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from . import ai_grader, config, storage
-from .modes import MODE_BY_ID, MODE_GRADERS
+from . import modes as registry
 
 # The comparable scores on both sides (human + agent). "na" is a first-class
 # verdict now, so na↔na counts as agreement and na↔other as a disagreement.
@@ -47,7 +47,7 @@ def mode_report(mode_id: int, variant: str) -> Dict:
     `variant` is ``"both"``, every pair from all real variants is pooled into a
     single dataset (one confusion matrix, distributions, agreement, and κ).
     """
-    mode = MODE_BY_ID[mode_id]
+    mode = registry.mode_by_id(mode_id) or {}
     mkey = str(mode_id)
 
     if variant == COMBINED_VARIANT:
@@ -115,10 +115,10 @@ def mode_report(mode_id: int, variant: str) -> Dict:
     return {
         "mode": {
             "id": mode_id,
-            "name": mode["name"],
+            "name": mode.get("name"),
             "severity": mode.get("severity"),
             "element": mode.get("element"),
-            "grader": MODE_GRADERS.get(mode_id),
+            "grader": registry.grader_name(mode_id),
         },
         "variant": variant,
         "variant_label": variant_label,

@@ -9,16 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import ai_grader, config, export, gitutil, grader_author, importer, recalibrate, reports, storage
-from .modes import (
-    DECK_MODE_IDS,
-    ELEMENT_ORDER,
-    GRADES,
-    MODE_BY_ID,
-    MODE_GRADER_NOTES,
-    MODE_GRADERS,
-    MODES,
-    PAIR_MODE_IDS,
-)
+from . import modes as registry
 
 config.ensure_dirs()
 
@@ -84,6 +75,27 @@ class AIBulkRunRequest(BaseModel):
     modes: Optional[List[int]] = None  # subset of pair-level mode ids; None = all
 
 
+class ModeCreate(BaseModel):
+    name: str
+    element: str
+    dimension: str = ""
+    severity: str = "P2"
+    level: Literal["pair", "deck"] = "pair"
+    enabled: bool = True
+    annotator: Optional[str] = None
+
+
+class ModeUpdate(BaseModel):
+    # All optional: only the fields the client sends are applied (PATCH semantics).
+    name: Optional[str] = None
+    element: Optional[str] = None
+    dimension: Optional[str] = None
+    severity: Optional[str] = None
+    level: Optional[Literal["pair", "deck"]] = None
+    enabled: Optional[bool] = None
+    annotator: Optional[str] = None
+
+
 def _cells_to_dict(modes: Dict[str, Cell]) -> Dict[str, Dict]:
     return {k: v.model_dump() for k, v in modes.items()}
 
@@ -97,12 +109,12 @@ def health() -> Dict:
 @app.get("/api/modes")
 def get_modes() -> Dict:
     return {
-        "modes": MODES,
-        "element_order": ELEMENT_ORDER,
-        "grades": GRADES,
-        "pair_mode_ids": PAIR_MODE_IDS,
-        "deck_mode_ids": DECK_MODE_IDS,
-        "mode_graders": MODE_GRADERS,
+        "modes": registry.enabled_modes(),
+        "element_order": registry.element_order(),
+        "grades": registry.GRADES,
+        "pair_mode_ids": registry.pair_mode_ids(),
+        "deck_mode_ids": registry.deck_mode_ids(),
+        "mode_graders": registry.mode_graders(enabled_only=True),
         "variants": config.VARIANTS,
     }
 
@@ -114,7 +126,7 @@ def get_mode_directory() -> Dict:
     git_state = gitutil.graders_status()
     dirty = set(git_state.get("dirty_graders") or [])
     out: List[Dict] = []
-    for m in MODES:
+    for m in registry.all_modes():
         entry = descs.get(str(m["id"]), {})
         rec = {
             **m,
@@ -128,9 +140,9 @@ def get_mode_directory() -> Dict:
             "prompt_message": "",
             "uncommitted": False,
         }
-        grader = MODE_GRADERS.get(m["id"])
+        grader = m.get("grader_name")
         if not grader:
-            rec["prompt_message"] = MODE_GRADER_NOTES.get(m["id"], "No VLM grader for this mode.")
+            rec["prompt_message"] = m.get("grader_note") or "No VLM grader for this mode."
         else:
             rec["grader_name"] = grader
             try:
@@ -144,41 +156,96 @@ def get_mode_directory() -> Dict:
                 rec["prompt_status"] = "unavailable"
                 rec["prompt_message"] = str(exc)
         out.append(rec)
-    return {"modes": out, "element_order": ELEMENT_ORDER, "git": git_state}
+    return {"modes": out, "element_order": registry.element_order(), "git": git_state}
+
+
+@app.post("/api/modes")
+def create_mode(body: ModeCreate) -> Dict:
+    """Add a custom failure mode. id is auto-assigned; it starts grader-less."""
+    try:
+        return registry.add_mode(body.model_dump(exclude={"annotator"}))
+    except registry.RegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/modes/{mode_id}")
+def update_mode(mode_id: int, body: ModeUpdate) -> Dict:
+    """Edit a mode's fields and/or enable/disable it (soft-disable). Only the
+    fields present in the request body are changed."""
+    if not registry.has_mode(mode_id):
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    fields = body.model_dump(exclude_unset=True, exclude={"annotator"})
+    if not fields:
+        return registry.mode_by_id(mode_id)
+    try:
+        return registry.update_mode(mode_id, fields)
+    except registry.RegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/modes/{mode_id}")
+def delete_mode(mode_id: int) -> Dict:
+    """Hard-delete a mode (custom or built-in) only if it has zero stored data.
+    Otherwise refuse with 409 — disable it instead. Any git-tracked grader dir is
+    left on disk for manual cleanup."""
+    if not registry.has_mode(mode_id):
+        raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
+    human = storage.count_human_grades_for_mode(mode_id)
+    ai = ai_grader.count_ai_grades_for_mode(mode_id)
+    if human or ai:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"mode #{mode_id} still has stored data ({human} human grade(s), "
+                f"{ai} AI verdict(s)) — disable it instead of deleting"
+            ),
+        )
+    grader = registry.grader_name(mode_id)
+    registry.delete_mode(mode_id)
+    return {"deleted": True, "mode_id": mode_id, "orphaned_grader": grader}
 
 
 @app.put("/api/modes/{mode_id}/description")
 def put_mode_description(mode_id: int, body: ModeDescriptionUpdate) -> Dict:
-    if mode_id not in MODE_BY_ID:
+    if not registry.has_mode(mode_id):
         raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
     return storage.set_mode_description(mode_id, body.text, body.annotator)
 
 
 @app.get("/api/modes/{mode_id}/grader-score-count")
 def grader_score_count(mode_id: int) -> Dict:
-    if mode_id not in MODE_BY_ID:
+    if not registry.has_mode(mode_id):
         raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
     return {"mode_id": mode_id, "count": ai_grader.count_ai_grades_for_mode(mode_id)}
 
 
 @app.post("/api/modes/{mode_id}/reinitialize-grader")
 def reinitialize_grader(mode_id: int, body: ReinitGraderRequest) -> Dict:
-    """Regenerate a mode's VLM grader prompt from its description, write it to the
-    git-tracked prompt.md, and clear that grader's AI scores (they must be re-run).
-    The new prompt is left uncommitted for the user to review then commit + push."""
-    if mode_id not in MODE_BY_ID:
+    """Author a mode's VLM grader prompt from its description and write it to the
+    git-tracked prompt.md, leaving it uncommitted for the user to review + push.
+
+    Reinitializes an existing grader in place, OR mints a brand-new grader for a
+    grader-less pair-level mode (creates the grader dir + grader.yml and attaches
+    it to the mode). Existing AI scores for the mode are cleared (must be re-run)."""
+    if not registry.has_mode(mode_id):
         raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
     try:
         gen = grader_author.generate_prompt(mode_id)
     except grader_author.GraderAuthorError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    ai_grader.write_grader_prompt(gen["grader_name"], gen["prompt"])
+    ai_grader.write_grader_prompt(
+        gen["grader_name"], gen["prompt"],
+        model=gen.get("model"), description=gen.get("description", ""),
+    )
+    if gen.get("created"):
+        registry.set_grader(mode_id, gen["grader_name"])
     cleared = ai_grader.clear_ai_grades_for_mode(mode_id)
     return {
         "mode_id": mode_id,
         "grader_name": gen["grader_name"],
         "model": gen["model"],
         "prompt": gen["prompt"],
+        "created": gen.get("created", False),
         "cleared": cleared,
         "latency_ms": gen.get("latency_ms"),
         "uncommitted": True,
@@ -189,13 +256,13 @@ def reinitialize_grader(mode_id: int, body: ReinitGraderRequest) -> Dict:
 def commit_grader(mode_id: int, body: CommitGraderRequest) -> Dict:
     """Commit + push this mode's grader prompt to GitHub. Scoped to the grader's
     files via a pathspec so unrelated working-tree changes are never swept in."""
-    if mode_id not in MODE_BY_ID:
+    if not registry.has_mode(mode_id):
         raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
-    grader = MODE_GRADERS.get(mode_id)
+    grader = registry.grader_name(mode_id)
     if not grader:
         raise HTTPException(status_code=400, detail=f"mode #{mode_id} has no VLM grader")
-    mode = MODE_BY_ID[mode_id]
-    message = (body.message or "").strip() or f'graders: reinitialize "{mode["name"]}" prompt (#{mode_id})'
+    mode = registry.mode_by_id(mode_id) or {}
+    message = (body.message or "").strip() or f'graders: reinitialize "{mode.get("name")}" prompt (#{mode_id})'
     res = gitutil.commit_and_push([grader], message)
     if res.get("error") and not res.get("committed"):
         raise HTTPException(status_code=502, detail=res["error"])
@@ -429,7 +496,7 @@ def cancel_import_job(job_id: str) -> Dict:
 def recalibration_preview(mode_id: int) -> Dict:
     """Cheap pre-run estimate (dataset/split sizes + model-call count) for the
     confirm dialog. Never renders or grades."""
-    if mode_id not in MODE_BY_ID:
+    if not registry.has_mode(mode_id):
         raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
     return recalibrate.estimate(mode_id)
 
@@ -437,7 +504,7 @@ def recalibration_preview(mode_id: int) -> Dict:
 @app.get("/api/modes/{mode_id}/recalibration")
 def recalibration_state(mode_id: int) -> Dict:
     """Restore UI state: the active job (if any) + the latest run for this mode."""
-    if mode_id not in MODE_BY_ID:
+    if not registry.has_mode(mode_id):
         raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
     latest = recalibrate.latest_run(mode_id)
     return {
@@ -449,7 +516,7 @@ def recalibration_state(mode_id: int) -> Dict:
 @app.post("/api/modes/{mode_id}/recalibration/run")
 def recalibration_run(mode_id: int) -> Dict:
     """Kick off a background recalibration for one mode."""
-    if mode_id not in MODE_BY_ID:
+    if not registry.has_mode(mode_id):
         raise HTTPException(status_code=404, detail=f"unknown mode #{mode_id}")
     try:
         return recalibrate.start_recalibration(mode_id)
@@ -513,7 +580,7 @@ def get_mode_report(mode_id: int, variant: str) -> Dict:
     """
     if variant != reports.COMBINED_VARIANT:
         _require_variant(variant)
-    if mode_id not in MODE_GRADERS:
+    if mode_id not in registry.mode_graders():
         raise HTTPException(status_code=404, detail=f"mode #{mode_id} has no AI grader")
     return reports.mode_report(mode_id, variant)
 

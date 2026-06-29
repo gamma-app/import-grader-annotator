@@ -5,8 +5,8 @@ being productive without breaking things. For product/usage + team setup see `RE
 for env vars see `.env.example`; for design docs see `docs/`.
 
 ## What this project is
-A **local** tool to grade PPTX→Gamma slide-import quality across **24 "failure modes"**
-(the *Import Evals Taxonomy / PSSL*). For each deck it shows the original **input** slide
+A **local** tool to grade PPTX→Gamma slide-import quality across a set of **"failure modes"**
+(the *Import Evals Taxonomy / PSSL* — seeded with **24**, editable in-app). For each deck it shows the original **input** slide
 beside an **output** slide and captures a Pass/Borderline/Fail grade + note per mode.
 Optionally a VLM ("AI") grader produces verdicts that are compared against the human grades
 in agreement **reports**. Data is shared across the team via one Google Drive folder — there
@@ -42,9 +42,9 @@ The API client is a thin `fetch` wrapper. The optional **PPTX importer** adds Pl
 | File | Responsibility |
 |---|---|
 | `main.py` | FastAPI app: ALL routes + Pydantic models + static mounts. **Source of truth for the API.** |
-| `config.py` | Paths + env vars (`SLIDE_GRADER_DATA`, cache, `PORT`, AI-grader settings), `VARIANTS`, `ensure_dirs()`. |
-| `modes.py` | The 24-mode registry: `MODES`, `MODE_BY_ID`, `MODE_GRADERS` (mode→VLM grader), `MODE_GRADER_NOTES`, `ELEMENT_ORDER`, `GRADES`, pair/deck id lists. |
-| `storage.py` | Deck scanning, PNG render coordination, annotation persistence (atomic temp-file writes + per-deck `RLock`), deck list/detail, `sync_annotation`, mode-description store. |
+| `config.py` | Paths + env vars (`SLIDE_GRADER_DATA`, cache, `PORT`, AI-grader settings), `VARIANTS`, `MODES_PATH` (the `modes.json` registry file), `ensure_dirs()`. |
+| `modes.py` | The failure-mode **registry**, data-backed by `<data>/modes.json` (seeded from the built-in 24 `_DEFAULT_*` taxonomy/graders/notes on first use, shared via Drive). Single read/write surface — everything calls **accessors at call time** (`all_modes`/`enabled_modes`/`mode_by_id`/`pair_mode_ids`/`deck_mode_ids`/`mode_graders`/`grader_name`/`element_order`) + **mutators** (`add_mode`/`update_mode`/`set_enabled`/`set_grader`/`delete_mode`, raising `RegistryError`). Also `ELEMENT_ORDER`, `GRADES`. |
+| `storage.py` | Deck scanning, PNG render coordination, annotation persistence (atomic temp-file writes + per-deck `RLock`), deck list/detail, `sync_annotation` (preserves any recorded cell whose mode still exists, so soft-disable + level edits are lossless), mode-description store, `count_human_grades_for_mode` (delete-guard). |
 | `pdf_split.py` | `pdf_page_count`, `render_pdf_to_pngs` (PyMuPDF). |
 | `ai_grader.py` | VLM grader integration: load grader prompt, grade a pair **in-process via `llm.py`**, bulk/background jobs, the `ai_grades/` store, `status()`, prompt read/write, counts. Optional (needs `ANTHROPIC_API_KEY`). |
 | `reports.py` | Read-only per-mode human-vs-AI **agreement report** (distributions, confusion matrix, Cohen's κ, disagreements). |
@@ -71,15 +71,18 @@ The API client is a thin `fetch` wrapper. The optional **PPTX importer** adds Pl
 | `components/ImageViewer.jsx` | Synchronized side-by-side zoom/pan. |
 | `components/ReportView.jsx` | Agreement report page. |
 | `components/ReportPdfDocument.jsx` | PDF export of one agreement report (lazy-loaded `@react-pdf/renderer`). |
-| `components/ModeDirectory.jsx` | Failure-mode directory: editable descriptions + read-only grader prompts + reinitialize/commit/**recalibrate** grader. |
+| `components/ModeDirectory.jsx` | Failure-mode directory: **add / edit / enable-disable / delete** modes, editable descriptions, read-only grader prompts + **generate**/reinitialize/commit/**recalibrate** grader. |
 | `components/RecalibratePanel.jsx` | Recalibration UI inside the directory: preview, run/poll a job, review a run, adopt/reject. |
 | `components/AiStatusDot.jsx` | AI availability indicator. |
 | `components/ImportPanel.jsx` | **Import PPTX** toolbar button + upload modal + live job polling; gates on importer readiness (playwright/soffice/gamma session) and shows what's missing. |
 
 ## Domain model
-- **Failure modes:** 24, in `modes.py`. 22 have a VLM grader (`MODE_GRADERS`); #18 (deck-level
-  brand color) and #21 (cross-slide) have none. Fields: `id, name, element, dimension,
-  severity, level` where `level` ∈ {`pair`, `deck`}.
+- **Failure modes:** an editable registry seeded with **24** built-ins (`modes.py` → `<data>/modes.json`).
+  Add custom modes, edit/disable/delete (incl. the built-ins), and give grader-less pair-level modes a
+  grader from the directory. 22 built-ins ship with a VLM grader; #18 (deck-level brand color) and #21
+  (cross-slide) have none. Per-mode fields: `id, name, element, dimension, severity, level, enabled,
+  builtin, grader_name` where `level` ∈ {`pair`, `deck`}. **Disable** (soft) keeps stored grades and hides
+  the mode from grading; **delete** (hard) is allowed only when the mode has zero stored data — else 409.
 - **Variants:** `ideal` / `current` / `programmatic` (`config.VARIANTS`). Almost everything is
   keyed by `(slug, variant)`.
 - **Human grades:** `ungraded | pass | borderline | fail` (+ free-text note).
@@ -98,6 +101,7 @@ The API client is a thin `fetch` wrapper. The optional **PPTX importer** adds Pl
 | Human annotations (autosaved) | `<data>/annotations/<slug>.json` (per-variant, schema v2) |
 | AI grades | `<data>/ai_grades/<slug>__<variant>.json` |
 | Mode descriptions | `<data>/mode_descriptions.json` |
+| Failure-mode registry (taxonomy) | `<data>/modes.json` (seeded from `modes.py` defaults; shared, last-write-wins) |
 | Exports | `<data>/exports/{consolidated.json,tidy.csv}` |
 | Rendered PNGs (**local cache, never synced**) | `.cache/renders/<slug>/{input,ideal,current,programmatic}/NNN.png` → served at `/images/...` |
 | gamma session + import scratch (**local, never synced; session is sensitive**) | `.cache/gamma_auth_state.json`, `.cache/imports/{uploads,work,debug}/` |
@@ -111,8 +115,11 @@ decks").
   `POST /api/rescan`, `GET /api/decks/{slug}/{variant}`.
 - **Grading:** `PUT /api/decks/{slug}/{variant}/pairs/{index}`,
   `PUT /api/decks/{slug}/{variant}/deck-level`.
+- **Registry CRUD:** `POST /api/modes` (add custom), `PATCH /api/modes/{id}` (edit fields /
+  enable-disable), `DELETE /api/modes/{id}` (hard-delete; **409** if it has stored data).
 - **Directory/graders:** `PUT /api/modes/{id}/description`,
-  `GET /api/modes/{id}/grader-score-count`, `POST /api/modes/{id}/reinitialize-grader`,
+  `GET /api/modes/{id}/grader-score-count`, `POST /api/modes/{id}/reinitialize-grader`
+  (also **creates** a grader for a grader-less pair-level mode),
   `POST /api/modes/{id}/commit-grader`, `GET /api/git/status`.
 - **AI grading:** `GET /api/ai-grades/status`, `POST /api/ai-grades/run`,
   `GET /api/ai-grades/jobs[/{id}]`, `POST /api/ai-grades/jobs/{id}/cancel`,
@@ -140,12 +147,15 @@ decks").
 - **Never write test data into the shared `SLIDE_GRADER_DATA` folder.** For backend checks,
   point `SLIDE_GRADER_DATA` at a `mktemp -d` directory.
 - **Don't add PNGs to the data dir** — renders are a local-only cache.
-- **No automated test suite** — verify manually (build the UI, restart/curl the API, click
-  through the affected page).
+- **No required test suite** — verify manually (build the UI, restart/curl the API, click through
+  the affected page). `backend/tests/` does have plain-python unit tests for pure logic
+  (`test_recalibrate.py`, `test_modes_registry.py`), runnable directly or via pytest.
 - Don't add/remove code comments wholesale; keep them purposeful as in the existing files.
 
 ## Verifying a change
 - Backend import check: `backend/.venv/bin/python -c "from app import main"`.
+- Unit tests (pure logic): `backend/.venv/bin/python tests/test_modes_registry.py` (and
+  `tests/test_recalibrate.py`).
 - Hit a route: `curl -s 127.0.0.1:8000/api/...` (run against a temp `SLIDE_GRADER_DATA` if it
   writes data).
 - Frontend: `cd frontend && npm run build` (catches JSX/build errors), then exercise via

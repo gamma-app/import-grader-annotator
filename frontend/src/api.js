@@ -57,6 +57,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ text }),
     }),
+  // Registry CRUD: add a custom mode, edit fields / enable-disable, hard-delete.
+  createMode: (fields) => req('/api/modes', { method: 'POST', body: JSON.stringify(fields) }),
+  updateMode: (modeId, fields) =>
+    req(`/api/modes/${modeId}`, { method: 'PATCH', body: JSON.stringify(fields) }),
+  deleteMode: (modeId) => req(`/api/modes/${modeId}`, { method: 'DELETE' }),
   getGraderScoreCount: (modeId) => req(`/api/modes/${modeId}/grader-score-count`),
   reinitializeGrader: (modeId) =>
     req(`/api/modes/${modeId}/reinitialize-grader`, {

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import config
-from .modes import DECK_MODE_IDS, PAIR_MODE_IDS
+from . import modes as registry
 from .pdf_split import pdf_page_count, render_pdf_to_pngs, write_pdf_without_pages
 
 # Per-deck reentrant locks serialize read-modify-write of each annotation file
@@ -37,6 +37,14 @@ def _now() -> str:
 
 def _default_cell() -> Dict:
     return {"grade": "ungraded", "note": ""}
+
+
+def _id_in(key: str, ids: set) -> bool:
+    """True if a stringified mode-id `key` is one of `ids` (ints)."""
+    try:
+        return int(key) in ids
+    except (TypeError, ValueError):
+        return False
 
 
 def prettify(slug: str) -> str:
@@ -205,7 +213,7 @@ def set_mode_description(mode_id: int, text: str, annotator: Optional[str] = Non
 
 
 def _pair_reviewed(modes: Dict[str, Dict]) -> bool:
-    return all(modes.get(str(mid), _default_cell())["grade"] != "ungraded" for mid in PAIR_MODE_IDS)
+    return all(modes.get(str(mid), _default_cell())["grade"] != "ungraded" for mid in registry.pair_mode_ids())
 
 
 def _pairs_from_images(slug: str, vkey: str):
@@ -255,15 +263,25 @@ def _sync_variant(slug: str, vkey: str, prev: Dict) -> Dict:
     now = _now()
     available = _variant_pdf(slug, vkey).exists()
 
+    # Active cells follow the live registry, but we preserve any prior cell whose
+    # mode still exists (disabled, or moved between pair/deck) so soft-disable and
+    # level edits never drop a recorded grade. Only truly-removed modes are dropped.
+    registry_ids = set(registry.all_mode_ids())
     prev_deck = prev.get("deck_level") or {}
-    deck_level = {str(mid): prev_deck.get(str(mid), _default_cell()) for mid in DECK_MODE_IDS}
+    deck_level = {str(mid): prev_deck.get(str(mid), _default_cell()) for mid in registry.deck_mode_ids()}
+    for k, v in prev_deck.items():
+        if k not in deck_level and _id_in(k, registry_ids):
+            deck_level[k] = v
 
     prev_pairs = {p["index"]: p for p in prev.get("pairs", [])}
     pairs: List[Dict] = []
     for pim in pair_imgs:
         prior = prev_pairs.get(pim["index"], {})
         prior_modes = prior.get("modes", {})
-        modes = {str(mid): prior_modes.get(str(mid), _default_cell()) for mid in PAIR_MODE_IDS}
+        modes = {str(mid): prior_modes.get(str(mid), _default_cell()) for mid in registry.pair_mode_ids()}
+        for k, v in prior_modes.items():
+            if k not in modes and _id_in(k, registry_ids):
+                modes[k] = v
         pairs.append(
             {
                 "index": pim["index"],
@@ -524,7 +542,7 @@ def update_pair(slug: str, vkey: str, index: int, modes: Dict[str, Dict], annota
         found = False
         for pair in variant["pairs"]:
             if pair["index"] == index:
-                for mid in PAIR_MODE_IDS:
+                for mid in registry.pair_mode_ids():
                     key = str(mid)
                     if key in modes:
                         cell = modes[key]
@@ -555,7 +573,7 @@ def update_deck_level(slug: str, vkey: str, modes: Dict[str, Dict], annotator: O
         ann = _load_for_update(slug, vkey)
         variant = ann["variants"][vkey]
         now = _now()
-        for mid in DECK_MODE_IDS:
+        for mid in registry.deck_mode_ids():
             key = str(mid)
             if key in modes:
                 cell = modes[key]
@@ -629,3 +647,36 @@ def annotation_variant(slug: str, vkey: str) -> Optional[Dict]:
         return None
     ann = _migrate(raw)
     return ann.get("variants", {}).get(vkey)
+
+
+def _cell_has_data(cell: Optional[Dict]) -> bool:
+    """True when a stored cell carries human data: a real grade or a note."""
+    if not cell:
+        return False
+    return cell.get("grade", "ungraded") != "ungraded" or bool((cell.get("note") or "").strip())
+
+
+def count_human_grades_for_mode(mode_id: int) -> int:
+    """How many stored human cells carry data for a mode, across all decks/variants
+    (pair-level + deck-level). Read-only; never renders. Used to gate hard-delete.
+
+    Enumerates the annotation files directly (not deck folders) so the count
+    reflects what's actually persisted even if a deck folder is missing."""
+    mid = str(mode_id)
+    total = 0
+    if not config.ANNOTATIONS_DIR.exists():
+        return 0
+    for path in sorted(config.ANNOTATIONS_DIR.glob("*.json")):
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        ann = _migrate(raw)
+        for v in ann.get("variants", {}).values():
+            if _cell_has_data((v.get("deck_level") or {}).get(mid)):
+                total += 1
+            for p in v.get("pairs", []):
+                if _cell_has_data((p.get("modes") or {}).get(mid)):
+                    total += 1
+    return total

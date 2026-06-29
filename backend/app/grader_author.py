@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Dict
 
-from . import config, llm, storage
-from .modes import MODE_BY_ID, MODE_GRADERS
+from . import ai_grader, config, llm, storage
+from . import modes as registry
 
 
 class GraderAuthorError(RuntimeError):
@@ -100,16 +100,28 @@ def _strip_outer_fence(text: str) -> str:
 
 
 def generate_prompt(mode_id: int) -> Dict:
-    """Generate a fresh grader rubric from the mode's saved description.
+    """Generate a grader rubric from the mode's saved description.
 
-    Returns {grader_name, model, prompt, latency_ms}. Raises GraderAuthorError on
-    unknown mode / no grader / missing description / model failure."""
-    mode = MODE_BY_ID.get(mode_id)
+    Works for both an existing grader (reinitialize in place) and a grader-less
+    pair-level mode (mint a new grader name). The caller writes the prompt and,
+    when ``created`` is True, attaches the grader to the mode in the registry.
+
+    Returns {grader_name, model, prompt, description, latency_ms, created}. Raises
+    GraderAuthorError on unknown mode / deck-level mode / missing description /
+    model failure."""
+    mode = registry.mode_by_id(mode_id)
     if not mode:
         raise GraderAuthorError(f"unknown mode #{mode_id}")
-    grader_name = MODE_GRADERS.get(mode_id)
+    grader_name = registry.grader_name(mode_id)
+    created = False
     if not grader_name:
-        raise GraderAuthorError(f"mode #{mode_id} has no VLM grader to reinitialize")
+        if mode.get("level") != "pair":
+            raise GraderAuthorError(
+                "only pair-level modes can have a per-slide VLM grader "
+                "(deck-level modes are graded once per deck, not per slide pair)"
+            )
+        grader_name = ai_grader.derive_grader_name(mode["name"], mode_id)
+        created = True
 
     descs = storage.load_mode_descriptions().get("descriptions", {})
     description = ((descs.get(str(mode_id)) or {}).get("text") or "").strip()
@@ -127,5 +139,7 @@ def generate_prompt(mode_id: int) -> Dict:
         "grader_name": grader_name,
         "model": model,
         "prompt": _strip_outer_fence(res["text"]),
+        "description": description,
         "latency_ms": res.get("latencyMs"),
+        "created": created,
     }

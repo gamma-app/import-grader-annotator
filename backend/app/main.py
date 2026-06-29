@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai_grader, config, export, gitutil, grader_author, recalibrate, reports, storage
+from . import ai_grader, config, export, gitutil, grader_author, importer, recalibrate, reports, storage
 from .modes import (
     DECK_MODE_IDS,
     ELEMENT_ORDER,
@@ -374,6 +374,54 @@ def run_ai_pair(slug: str, variant: str, index: int, body: AIRunRequest) -> Dict
         return ai_grader.grade_pair(slug, variant, index, modes=body.modes, force=body.force)
     except ai_grader.AIGraderError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ----------------------------------------------------------------- pptx import
+@app.get("/api/imports/status")
+def import_status() -> Dict:
+    """Readiness for the PPTX -> 'current import' pipeline (playwright/soffice/session)."""
+    return importer.status()
+
+
+@app.post("/api/imports")
+async def start_import(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    slug: Optional[str] = Form(None),
+) -> Dict:
+    """Upload a PPTX and start a background 'current import' job: it produces a
+    gradable pair (input.pdf + current_output.pdf) under decks/<slug>/ by rendering
+    the PPTX and driving gamma.app's current-import + PDF export."""
+    data = await file.read()
+    try:
+        return importer.start_import(
+            pptx_bytes=data, filename=file.filename or "upload.pptx", title=title, slug=slug
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except importer.ImporterError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/api/imports/jobs")
+def list_import_jobs() -> Dict:
+    return importer.list_jobs()
+
+
+@app.get("/api/imports/jobs/{job_id}")
+def get_import_job(job_id: str) -> Dict:
+    job = importer.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"job '{job_id}' not found")
+    return job
+
+
+@app.post("/api/imports/jobs/{job_id}/cancel")
+def cancel_import_job(job_id: str) -> Dict:
+    job = importer.cancel_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"job '{job_id}' not found")
+    return job
 
 
 # ----------------------------------------------------------------- recalibration

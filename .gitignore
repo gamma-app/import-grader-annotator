@@ -14,4 +14,8 @@ frontend/dist/
 .cache/
 .env
 
+# Captured gamma.app login session for the PPTX importer — SENSITIVE (live session
+# cookies). Default lives under .cache/ already; this guards custom paths too.
+*gamma_auth_state*.json
+
 .DS_Store

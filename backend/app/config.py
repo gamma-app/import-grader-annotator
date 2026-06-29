@@ -87,7 +87,46 @@ RECALIBRATE_MAX_TOKENS = int(os.environ.get("RECALIBRATE_MAX_TOKENS", "4096"))
 # Smallest dataset (pooled labeled pairs) a recalibration will run on.
 RECALIBRATE_MIN_DATASET = int(os.environ.get("RECALIBRATE_MIN_DATASET", "10"))
 
+# --- PPTX import automation (gamma.app browser automation; see app/importer.py) ---
+# A user uploads a .pptx and the importer produces a gradable pair:
+#   input.pdf           — PPTX rendered to PDF via headless LibreOffice (soffice)
+#   current_output.pdf  — gamma "current import" exported to PDF, driven by Playwright
+# It reuses a saved gamma.app login session captured once via `app.gamma_login`.
+GAMMA_BASE_URL = (os.environ.get("GAMMA_BASE_URL") or "https://gamma.app").rstrip("/")
+# Playwright storageState holding the gamma_session cookies. Machine-LOCAL and
+# SENSITIVE — kept OUT of the shared data dir (default: gitignored .cache).
+GAMMA_AUTH_STATE_PATH = Path(
+    os.environ.get("GAMMA_AUTH_STATE_PATH") or (PROJECT_ROOT / ".cache" / "gamma_auth_state.json")
+).resolve()
+# Run the import browser headless. Set GAMMA_IMPORT_HEADLESS=0 to watch it (useful
+# when calibrating selectors).
+GAMMA_IMPORT_HEADLESS = os.environ.get("GAMMA_IMPORT_HEADLESS", "1").strip().lower() not in ("0", "false", "no")
+# Overall per-import budget (ms). Gamma generation can take a few minutes.
+GAMMA_IMPORT_TIMEOUT_MS = int(os.environ.get("GAMMA_IMPORT_TIMEOUT_MS", "600000"))
+# Per-action timeout (ms) for individual Playwright calls.
+GAMMA_ACTION_TIMEOUT_MS = int(os.environ.get("GAMMA_ACTION_TIMEOUT_MS", "20000"))
+# Browser User-Agent for both the importer and the login capture. CRITICAL: it
+# must look like a NORMAL desktop browser. Gamma's isRobot() check keys off the
+# UA (true if it starts with "gamma/" or looks like "Chrome Headless"), and on
+# production gamma.app a robot UA makes the app SKIP LaunchDarkly feature-flag
+# initialization (see FeatureFlagWrapper.tsx). That hides all flag-gated UI —
+# including the entire PPTX import flow (pptImportV2/docImport/pptImport). So we
+# present as a real Chrome on macOS. Do NOT prefix this with "gamma/".
+GAMMA_USER_AGENT = os.environ.get("GAMMA_USER_AGENT") or (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+# Optional explicit path to the LibreOffice binary for PPTX->PDF (auto-detected
+# from PATH / the standard macOS app bundle when empty).
+SOFFICE_BIN = os.environ.get("SOFFICE_BIN") or ""
+# Local scratch for uploaded PPTX files + per-job debug artifacts (screenshots,
+# DOM dumps, traces). Local-only and regenerable — NEVER the shared data dir.
+IMPORTS_DIR = Path(
+    os.environ.get("SLIDE_GRADER_IMPORTS") or (PROJECT_ROOT / ".cache" / "imports")
+).resolve()
+
 INPUT_PDF = "input.pdf"
+INPUT_PPTX = "input.pptx"  # source PPTX kept beside input.pdf for provenance/re-import
 INPUT_DIR = "input"
 
 # Output variants: each deck pairs `input` against one or more outputs.
@@ -107,5 +146,5 @@ ANNOTATION_SCHEMA_VERSION = 2
 
 
 def ensure_dirs() -> None:
-    for d in (DECKS_DIR, ANNOTATIONS_DIR, EXPORTS_DIR, AI_GRADES_DIR, RECALIBRATIONS_DIR, RENDER_CACHE_DIR):
+    for d in (DECKS_DIR, ANNOTATIONS_DIR, EXPORTS_DIR, AI_GRADES_DIR, RECALIBRATIONS_DIR, RENDER_CACHE_DIR, IMPORTS_DIR):
         d.mkdir(parents=True, exist_ok=True)

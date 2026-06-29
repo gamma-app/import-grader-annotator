@@ -33,7 +33,8 @@ Every deck has three output **variants**, graded independently:
 ## Stack
 Backend = FastAPI (Python 3.10+, PyMuPDF for PDF→PNG). Frontend = React 18 + Vite +
 TailwindCSS + lucide-react. **No router lib, no state-management lib, no test framework.**
-The API client is a thin `fetch` wrapper.
+The API client is a thin `fetch` wrapper. The optional **PPTX importer** adds Playwright
+(headless Chromium) + LibreOffice (`soffice`) — both lazy/runtime, so the app runs without them.
 
 ## Architecture
 
@@ -52,6 +53,8 @@ The API client is a thin `fetch` wrapper.
 | `grader_author.py` | LLM-authors/regenerates a grader's `prompt.md` from a mode description. |
 | `gitutil.py` | Git status/commit/push scoped to the graders dir (committing regenerated prompts). |
 | `llm.py` | Direct **Anthropic** vision/text client (stdlib `urllib`, no SDK). Runs grader rubrics in-process; used by `ai_grader`, `recalibrate`, `grader_author`. Replaces the old eval-server. |
+| `importer.py` | **PPTX import automation**: PPTX→`input.pdf` (headless LibreOffice `soffice`) + drives gamma.app in a headless browser (Playwright, sync API in a worker thread) to produce `current_output.pdf`, then places + renders the deck. Reproduces the manual click-path: **Import → AI import → upload → Visual import → 3× Continue** (import-settings, pick-a-theme, then the slide-**preview** Continue that calls `generate()`; that one is disabled until slides finish importing, so it's polled) → wait for `/docs/<id>` → **Share → Export → Export to PDF** (the `Export` tab is a button sitting next to `Export 0 cards`/`Export…` decoys, so clicks use exact-name-first + first-visible matching). Single-active background job (mirrors `ai_grader`). Gamma UI labels/step-hints/selectors are env-overridable constants (`GAMMA_*`); screenshot+DOM debug artifacts under `.cache/imports/debug/<job>/` on failure. Optional (needs `playwright`, `soffice`, a saved gamma session). |
+| `gamma_login.py` | One-time interactive `python -m app.gamma_login` (headed) — captures a gamma.app Playwright `storageState` to `GAMMA_AUTH_STATE_PATH` for the importer to reuse headlessly. |
 
 ### Frontend (`frontend/src/`)
 | File | Responsibility |
@@ -71,6 +74,7 @@ The API client is a thin `fetch` wrapper.
 | `components/ModeDirectory.jsx` | Failure-mode directory: editable descriptions + read-only grader prompts + reinitialize/commit/**recalibrate** grader. |
 | `components/RecalibratePanel.jsx` | Recalibration UI inside the directory: preview, run/poll a job, review a run, adopt/reject. |
 | `components/AiStatusDot.jsx` | AI availability indicator. |
+| `components/ImportPanel.jsx` | **Import PPTX** toolbar button + upload modal + live job polling; gates on importer readiness (playwright/soffice/gamma session) and shows what's missing. |
 
 ## Domain model
 - **Failure modes:** 24, in `modes.py`. 22 have a VLM grader (`MODE_GRADERS`); #18 (deck-level
@@ -96,6 +100,7 @@ The API client is a thin `fetch` wrapper.
 | Mode descriptions | `<data>/mode_descriptions.json` |
 | Exports | `<data>/exports/{consolidated.json,tidy.csv}` |
 | Rendered PNGs (**local cache, never synced**) | `.cache/renders/<slug>/{input,ideal,current,programmatic}/NNN.png` → served at `/images/...` |
+| gamma session + import scratch (**local, never synced; session is sensitive**) | `.cache/gamma_auth_state.json`, `.cache/imports/{uploads,work,debug}/` |
 
 Persistence pattern: read-modify-write JSON under a per-deck `RLock`, written atomically
 (`tempfile` + `os.replace`). One file per deck; Drive is last-write-wins (the team "divides
@@ -117,6 +122,8 @@ decks").
   `POST /api/modes/{id}/recalibration/run`, `GET /api/recalibration/jobs/{id}`,
   `POST /api/recalibration/jobs/{id}/cancel`, `GET /api/recalibration/runs/{id}`,
   `POST /api/recalibration/runs/{id}/{adopt,reject}`.
+- **PPTX import:** `GET /api/imports/status`, `POST /api/imports` (multipart `.pptx` upload),
+  `GET /api/imports/jobs[/{id}]`, `POST /api/imports/jobs/{id}/cancel`.
 - **Reports/export:** `GET /api/reports/mode/{id}?variant=`, `POST /api/export`.
 - **Static:** `/images` (render cache), `/` (built UI).
 

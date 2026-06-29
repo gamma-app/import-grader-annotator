@@ -109,4 +109,27 @@ export const api = {
     req(`/api/recalibration/runs/${encodeURIComponent(runId)}/adopt`, { method: 'POST' }),
   rejectRecalibration: (runId) =>
     req(`/api/recalibration/runs/${encodeURIComponent(runId)}/reject`, { method: 'POST' }),
+
+  // --- PPTX import (browser-drives gamma.app to produce a 'current' pair) ---
+  // Readiness for the importer (playwright + LibreOffice + a saved gamma session).
+  getImportStatus: () => req('/api/imports/status'),
+  // Upload a .pptx (multipart, NOT JSON) to kick off a background import job.
+  startImport: ({ file, title = '', slug = '' }) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (title) form.append('title', title)
+    if (slug) form.append('slug', slug)
+    // Don't set Content-Type: the browser adds the multipart boundary itself.
+    return fetch('/api/imports', { method: 'POST', body: form }).then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(`${res.status} ${res.statusText}: ${text}`)
+      }
+      return res.json()
+    })
+  },
+  getImportJobs: () => req('/api/imports/jobs'),
+  getImportJob: (jobId) => req(`/api/imports/jobs/${encodeURIComponent(jobId)}`),
+  cancelImportJob: (jobId) =>
+    req(`/api/imports/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
 }

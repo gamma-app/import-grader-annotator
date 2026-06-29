@@ -4,6 +4,13 @@ fastapi>=0.115
 uvicorn>=0.30
 pymupdf>=1.24
 pydantic>=2.9
+# Multipart form parsing for the PPTX upload endpoint (FastAPI UploadFile).
+python-multipart>=0.0.9
+# PPTX import automation: drives gamma.app in a headless browser to produce
+# current_output.pdf. After `pip install`, run `playwright install chromium`
+# once to download the browser binary (see setup.sh). PPTX->input.pdf also needs
+# LibreOffice (`soffice`) on PATH — a system install, not a pip package.
+playwright>=1.40
 
 # Dev/test only (optional): `pip install pytest` to run backend/tests/.
 # pytest>=8.0

@@ -151,6 +151,43 @@ Day-to-day the data dir *is* your Google Drive folder, so adding a deck is just:
 **PDFs only** — never add PNGs; the app renders those locally per machine, and they're
 never synced to Drive.
 
+## Importing a deck from PowerPoint (automated)
+
+Instead of running gamma's import by hand and copying the result into Drive, click
+**Import PPTX** on the dashboard, upload a `.pptx`, and the app builds a gradable
+**`current`** pair for you:
+
+1. **`input.pdf`** — the PowerPoint rendered to PDF with headless **LibreOffice**.
+2. **`current_output.pdf`** — gamma's **current import** of that PPTX, driven in a
+   headless browser (Playwright) using your saved gamma.app login, then exported to PDF.
+
+For `current_output.pdf` the importer reproduces the manual gamma click-path end-to-end:
+**Import → AI import → upload the `.pptx` → Visual import → Continue** (import settings)
+**→ Continue** (pick-a-theme) **→ Continue** (slide preview — this one starts generation) →
+wait for the generated deck to open at `/docs/<id>` → **Share → Export → Export to PDF**. It
+logs each step and waits out gamma's slide-import and generation, which can take a few
+minutes for large decks.
+
+Both land in `decks/<slug>/` (slug derived from the filename, or set a title), the pair is
+rendered, and it shows up ready to grade. It runs as a background job with live progress
+(stages: *converting → importing → finalizing*); the upload is blocked if the slug already exists.
+
+**One-time setup (per machine that will import):**
+
+- `backend/.venv/bin/playwright install chromium` (also run by `setup.sh`).
+- Install **LibreOffice** so `soffice` is available for PPTX→PDF.
+- Capture a gamma session once: `backend/.venv/bin/python -m app.gamma_login` — log in
+  in the window that opens, then press Enter. Re-run if the importer says it expired.
+
+The **Import PPTX** dialog shows exactly what's missing until all three are satisfied.
+Only the `current` variant is automated; `ideal`/`programmatic` are still added by hand.
+
+> The gamma.app import/export UI is feature-flagged and evolves, so the click-path may
+> need a one-time **calibration** against your account. On any failure the importer saves
+> a screenshot + DOM under `.cache/imports/debug/<job>/`, and the button labels, per-step
+> text hints, and selectors are all overridable via `GAMMA_*` env vars (see `.env.example`).
+> Set `GAMMA_IMPORT_HEADLESS=0` to watch it run.
+
 ## Data & storage
 
 Paths below are relative to the **data dir** (`SLIDE_GRADER_DATA`, default `./data`; point

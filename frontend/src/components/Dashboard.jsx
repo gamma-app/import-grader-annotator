@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { AlertTriangle, RefreshCw, Loader2, ChevronRight, ChevronDown, Sparkles, Scissors } from 'lucide-react'
 import { api } from '../api'
 import AiStatusDot from './AiStatusDot.jsx'
+import ImportPanel from './ImportPanel.jsx'
 
 function ProgressBar({ done, total }) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0
@@ -260,6 +261,7 @@ export default function Dashboard({ variant, onOpen, onAlign, showToast }) {
               )}
               Run AI · all
             </button>
+            <ImportPanel onImported={load} showToast={showToast} />
             <button
               onClick={onRescan}
               disabled={busy}
@@ -307,6 +309,10 @@ export default function Dashboard({ variant, onOpen, onAlign, showToast }) {
             <p className="text-sm">
               Add a folder under <code className="text-indigo-300">data/decks/&lt;slug&gt;/</code> containing
               <code className="text-indigo-300"> input.pdf</code>, <code className="text-indigo-300">ideal_output.pdf</code>, and <code className="text-indigo-300">current_output.pdf</code>, then Rescan.
+            </p>
+            <p className="text-sm mt-2">
+              Or click <span className="text-indigo-300">Import PPTX</span> to upload a PowerPoint and auto-generate the
+              <code className="text-indigo-300"> current</code> pair.
             </p>
           </div>
         ) : (
